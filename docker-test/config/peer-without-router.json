@@ -16,10 +16,10 @@
     },
     "transport": {
         "unicast": {
-            "max_sessions": 3
+            "max_sessions": 4
         },
         "multicast": {
-            "max_sessions": 3
+            "max_sessions": 4
         }
     },
     "plugins": {

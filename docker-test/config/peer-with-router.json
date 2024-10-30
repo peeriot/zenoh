@@ -1,0 +1,31 @@
+{
+    "mode": "peer",
+    "scouting": {
+        "multicast": {
+            "enabled": true,
+            "autoconnect": [ "router", "peer" ]
+        },
+        "gossip": {
+            "enabled": false
+        }
+    },
+    "routing": {
+        "peer": {
+            "mode": "linkstate"
+        }
+    },
+    "transport": {
+        "unicast": {
+            "max_sessions": 6
+        },
+        "multicast": {
+            "max_sessions": 6
+        }
+    },
+    "plugins": {
+        "rest": {
+            "http_port": 80,
+            "__required__": true
+        }
+    }
+}

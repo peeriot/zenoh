@@ -2,7 +2,8 @@
     "mode": "router",
     "scouting": {
         "multicast": {
-            "enabled": false
+            "enabled": true,
+            "autoconnect": [ "router" ]
         },
         "gossip": {
             "enabled": false

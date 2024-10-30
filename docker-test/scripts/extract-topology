@@ -65,9 +65,16 @@ cd "$DOCKER_DIR"
 rm -rf "$TOPO_DIR"
 mkdir -p "$TOPO_DIR"
 
+if [ $# -eq 0 ]; then
+    CONTAINERS="$(docker compose ps -q)"
+
+else
+    CONTAINERS="$@"
+fi
+
 write_network "graph PeerNetwork {"
 
-for CONTAINER in $(docker compose ps -q); do
+for CONTAINER in $CONTAINERS; do
     echo "- Container:"
 
     ADDRS=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}' $CONTAINER)
