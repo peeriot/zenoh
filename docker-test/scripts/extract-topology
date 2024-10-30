@@ -1,0 +1,94 @@
+#!/bin/bash
+
+set -e
+
+export SCRIPT_DIR="$(dirname $0)"
+export DOCKER_DIR="$(readlink -f "$SCRIPT_DIR/../")"
+export TOPO_DIR="$DOCKER_DIR/topology"
+export NETWORK_DOT_FILE="$TOPO_DIR/network.dot"
+export NETWORK_PNG_FILE="$TOPO_DIR/network.png"
+
+finish() {
+    cd "$OLD_PWD"
+}
+
+write_network() {
+    echo "$@" >> "$NETWORK_DOT_FILE"
+}
+
+write_nodes() {
+    JSON_FILE="$1"
+    TYPE="$2"
+    COLOR="$3"
+
+    echo "  - ${TYPE}s:"
+
+    while read -r ENTRY; do
+        if [ -z "$ENTRY" ]; then
+            continue
+        fi
+
+        ZID=$(echo "$ENTRY" | jq -r '.value.zid')
+
+        VAR_PEER="PEERS_$ZID"
+
+        echo "    - $ZID:"
+
+        if [ "${!VAR_PEER}" != "true" ]; then
+            eval "$VAR_PEER=\"true\""
+            write_network "    \"$ZID\" [label=\"$TYPE\n${ZID:0:10}\", color=\"$COLOR\"];"
+        fi
+
+        while read -r ENTRY; do
+            if [ -z "$ENTRY" ]; then
+                continue
+            fi
+
+            PEER_ID=$(echo "$ENTRY" | jq -r '.peer')
+            VAR_CONNECTION1="CONNECTION_${PEER_ID}_${ZID}"
+            VAR_CONNECTION2="CONNECTION_${ZID}_${PEER_ID}"
+
+            echo "      - $PEER_ID"
+
+            if [ "${!VAR_CONNECTION1}" != "true" ] && [ "${!VAR_CONNECTION2}" != "true" ]; then
+                eval "$VAR_CONNECTION1=\"true\""
+                eval "$VAR_CONNECTION2=\"true\""
+                write_network "    \"$ZID\" -- \"$PEER_ID\""
+            fi
+        done <<< "$(echo "$ENTRY" | jq -c '.value.sessions[]')"
+    done <<< "$(jq -c ".[] | select(.key | test(\"^@/[^/]+/${TYPE}$\"))" "$JSON_FILE")"
+}
+
+trap finish EXIT
+
+cd "$DOCKER_DIR"
+rm -rf "$TOPO_DIR"
+mkdir -p "$TOPO_DIR"
+
+write_network "graph PeerNetwork {"
+
+for CONTAINER in $(docker compose ps -q); do
+    echo "- Container:"
+
+    ADDRS=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}' $CONTAINER)
+    ADDRS="${ADDRS%,}"
+    NAME=$(docker inspect -f '{{.Name}}' $CONTAINER)
+    NAME="${NAME#/}"
+    JSON_FILE="$TOPO_DIR/$NAME-$CONTAINER.json"
+
+    echo "  - ID: $CONTAINER"
+    echo "  - Name: $NAME"
+    echo "  - Addresses: $ADDRS"
+
+    ADDR="${ADDRS%%,*}"
+
+    curl "http://$ADDR/@/**" 2>/dev/null | jq --indent 4 . > "$JSON_FILE"
+
+    write_nodes "$JSON_FILE" "client" "#d92626"
+    write_nodes "$JSON_FILE" "peer" "#91d926"
+    write_nodes "$JSON_FILE" "router" "#2626d9"
+done
+
+write_network "}"
+
+dot -Tpng "$NETWORK_DOT_FILE" -o "$NETWORK_PNG_FILE"

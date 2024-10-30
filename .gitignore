@@ -22,3 +22,7 @@
 cargo-timing*.html
 
 ci/valgrind-check/*.log
+
+docker-test/artifacts/
+docker-test/logs/
+docker-test/topology/

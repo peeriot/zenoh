@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -e
+
+export SCRIPT_DIR="$(dirname $0)"
+export DOCKER_DIR="$(readlink -f "$SCRIPT_DIR/../")"
+export LOG_DIR="$DOCKER_DIR/logs"
+
+finish() {
+    cd "$OLD_PWD"
+}
+
+trap finish EXIT
+
+cd "$DOCKER_DIR"
+rm -rf "$LOG_DIR"
+mkdir -p "$LOG_DIR"
+
+for CONTAINER in $(docker compose ps -aq); do
+    echo "- Container:"
+
+    NAME=$(docker inspect -f '{{.Name}}' $CONTAINER)
+    NAME="${NAME#/}"
+    LOG_FILE="$LOG_DIR/$NAME-$CONTAINER.log"
+
+    echo "  - ID: $CONTAINER"
+    echo "  - Name: $NAME"
+
+    docker logs "$CONTAINER" > "$LOG_FILE"
+done

@@ -88,7 +88,8 @@ fn main() {
 
             let args = Args::parse();
             let config = config_from_args(&args);
-            tracing::info!("Initial conf: {}", &config);
+            tracing::info!("Parsed args: {:#?}", &args);
+            tracing::info!("Initial conf: {:#?}", &config);
 
             let _session = match zenoh::open(config).await {
                 Ok(runtime) => runtime,
@@ -135,7 +136,7 @@ fn config_from_args(args: &Args) -> Config {
             .plugins_loading
             // REVIEW: Should this append to search_dirs instead? As there is no way to pass the new
             // `current_exe_parent` unless we change the format of the argument and this overrides
-            // the one set from the default config. 
+            // the one set from the default config.
             // Also, --cfg plugins_loading/search_dirs=[...] makes this argument superfluous.
             .set_search_dirs(LibSearchDirs::from_paths(&args.plugin_search_dir))
             .unwrap();

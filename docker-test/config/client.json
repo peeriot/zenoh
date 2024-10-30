@@ -1,0 +1,26 @@
+{
+    "mode": "client",
+    "scouting": {
+        "multicast": {
+            "enabled": true,
+            "autoconnect": [ "peer" ]
+        },
+        "gossip": {
+            "enabled": false
+        }
+    },
+    "transport": {
+        "unicast": {
+            "max_sessions": 1
+        },
+        "multicast": {
+            "max_sessions": 2
+        }
+    },
+    "plugins": {
+        "rest": {
+            "http_port": 80,
+            "__required__": true
+        }
+    }
+}
