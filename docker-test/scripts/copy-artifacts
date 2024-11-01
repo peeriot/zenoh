@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -ex
+set -e
 
 export SCRIPT_DIR="$(dirname $0)"
 export PROJECT_ROOT="$(readlink -f "$SCRIPT_DIR/../..")"

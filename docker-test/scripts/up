@@ -1,0 +1,11 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(dirname $0)"
+DOCKER_DIR="$(readlink -f "$SCRIPT_DIR/..")"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+
+"$SCRIPT_DIR/copy-artifacts"
+
+echo "Use compose file: $COMPOSE_FILE"
+
+docker compose -f "$DOCKER_DIR/$COMPOSE_FILE" up -d --build --force-recreate

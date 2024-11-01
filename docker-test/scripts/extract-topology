@@ -9,6 +9,7 @@ export NETWORK_DOT_FILE="$TOPO_DIR/network.dot"
 export NETWORK_PNG_FILE="$TOPO_DIR/network.png"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+echo "Use compose file: $COMPOSE_FILE"
 
 finish() {
     cd "$OLD_PWD"
