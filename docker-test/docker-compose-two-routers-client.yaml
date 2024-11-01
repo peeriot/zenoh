@@ -1,0 +1,78 @@
+name: zenoh
+
+networks:
+  routers:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.1.0/24
+  mesh_a:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.2.0/24
+  mesh_b:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.3.0/24
+
+x-service-template: &service-template
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    - RUST_LOG=debug,zenoh_plugin_rest=trace
+  expose:
+    - 80
+  restart: no
+  stop_signal: SIGINT
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost/@" ]
+    interval: 3s
+    timeout: 10s
+    retries: 5
+
+services:
+
+  # Network A
+
+  router_a:
+    <<: *service-template
+    networks:
+      routers:
+      mesh_a:
+    command: [
+      "-c", "/etc/zenohd/router.json"
+    ]
+
+  client_a:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - router_a
+    command: [
+      "-c", "/etc/zenohd/client-router.json"
+    ]
+
+  # Network B
+
+  router_b:
+    <<: *service-template
+    networks:
+      routers:
+      mesh_b:
+    command: [
+      "-c", "/etc/zenohd/router.json"
+    ]
+
+  client_b:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - router_b
+    command: [
+      "-c", "/etc/zenohd/client-router.json"
+    ]

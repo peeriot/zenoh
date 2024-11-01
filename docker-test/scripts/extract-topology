@@ -8,6 +8,8 @@ export TOPO_DIR="$DOCKER_DIR/topology"
 export NETWORK_DOT_FILE="$TOPO_DIR/network.dot"
 export NETWORK_PNG_FILE="$TOPO_DIR/network.png"
 
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+
 finish() {
     cd "$OLD_PWD"
 }
@@ -66,7 +68,7 @@ rm -rf "$TOPO_DIR"
 mkdir -p "$TOPO_DIR"
 
 if [ $# -eq 0 ]; then
-    CONTAINERS="$(docker compose ps -q)"
+    CONTAINERS="$(docker compose -f "$COMPOSE_FILE" ps -q)"
 
 else
     CONTAINERS="$@"

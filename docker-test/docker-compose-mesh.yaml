@@ -1,0 +1,36 @@
+name: zenoh
+
+networks:
+  mesh:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.1.0/24
+
+x-service-template: &service-template
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    - RUST_LOG=debug,zenoh_plugin_rest=trace
+  expose:
+    - 80
+  restart: no
+  stop_signal: SIGINT
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost/@" ]
+    interval: 3s
+    timeout: 10s
+    retries: 5
+
+services:
+  peer:
+    <<: *service-template
+    networks:
+      mesh:
+    command: [
+      "-c", "/etc/zenohd/peer-without-router.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 5

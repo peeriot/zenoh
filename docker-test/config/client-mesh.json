@@ -9,9 +9,12 @@
             "enabled": false
         }
     },
+    "timestamping": {
+        "enabled": true
+    },
     "transport": {
         "unicast": {
-            "max_sessions": 1
+            "max_sessions": 2
         },
         "multicast": {
             "max_sessions": 2

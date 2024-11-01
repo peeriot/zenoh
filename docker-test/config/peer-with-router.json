@@ -6,8 +6,11 @@
             "autoconnect": [ "router", "peer" ]
         },
         "gossip": {
-            "enabled": false
+            "enabled": true
         }
+    },
+    "timestamping": {
+        "enabled": true
     },
     "routing": {
         "peer": {

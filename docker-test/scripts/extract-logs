@@ -6,6 +6,8 @@ export SCRIPT_DIR="$(dirname $0)"
 export DOCKER_DIR="$(readlink -f "$SCRIPT_DIR/../")"
 export LOG_DIR="$DOCKER_DIR/logs"
 
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+
 finish() {
     cd "$OLD_PWD"
 }
@@ -16,7 +18,7 @@ cd "$DOCKER_DIR"
 rm -rf "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 
-for CONTAINER in $(docker compose ps -aq); do
+for CONTAINER in $(docker compose -f "$COMPOSE_FILE" ps -aq); do
     echo "- Container:"
 
     NAME=$(docker inspect -f '{{.Name}}' $CONTAINER)

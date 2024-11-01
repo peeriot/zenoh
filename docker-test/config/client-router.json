@@ -1,28 +1,23 @@
 {
-    "mode": "peer",
+    "mode": "client",
     "scouting": {
         "multicast": {
             "enabled": true,
-            "autoconnect": [ "peer" ]
+            "autoconnect": [ "router" ]
         },
         "gossip": {
-            "enabled": true
+            "enabled": false
         }
     },
     "timestamping": {
         "enabled": true
     },
-    "routing": {
-        "peer": {
-            "mode": "linkstate"
-        }
-    },
     "transport": {
         "unicast": {
-            "max_sessions": 4
+            "max_sessions": 2
         },
         "multicast": {
-            "max_sessions": 4
+            "max_sessions": 2
         }
     },
     "plugins": {

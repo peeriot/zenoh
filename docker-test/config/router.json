@@ -6,7 +6,18 @@
             "autoconnect": [ "router" ]
         },
         "gossip": {
-            "enabled": false
+            "enabled": true
+        }
+    },
+    "timestamping": {
+        "enabled": true
+    },
+    "routing": {
+        "router": {
+            "peers_failover_brokering": true
+        },
+        "peer": {
+            "mode": "linkstate"
         }
     },
     "plugins": {

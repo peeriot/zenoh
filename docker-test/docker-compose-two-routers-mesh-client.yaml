@@ -22,7 +22,7 @@ x-service-template: &service-template
     context: .
     dockerfile: Dockerfile
   environment:
-    - RUST_LOG=debug
+    - RUST_LOG=debug,zenoh_plugin_rest=trace
   expose:
     - 80
   restart: no
@@ -70,7 +70,7 @@ services:
     ]
     deploy:
       mode: replicated
-      replicas: 8
+      replicas: 10
 
   client_a:
     <<: *service-template
@@ -79,11 +79,11 @@ services:
     depends_on:
       - peer_a_without_router
     command: [
-      "-c", "/etc/zenohd/client.json"
+      "-c", "/etc/zenohd/client-mesh.json"
     ]
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 5
 
   # Network B
 
@@ -129,7 +129,7 @@ services:
     depends_on:
       - peer_b_without_router
     command: [
-      "-c", "/etc/zenohd/client.json"
+      "-c", "/etc/zenohd/client-mesh.json"
     ]
     deploy:
       mode: replicated

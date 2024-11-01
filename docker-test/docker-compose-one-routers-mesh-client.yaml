@@ -1,0 +1,122 @@
+name: zenoh
+
+networks:
+  mesh_a:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.2.0/24
+  mesh_b:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.3.0/24
+
+x-service-template: &service-template
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    - RUST_LOG=debug,zenoh_plugin_rest=trace
+  expose:
+    - 80
+  restart: no
+  stop_signal: SIGINT
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost/@" ]
+    interval: 3s
+    timeout: 10s
+    retries: 5
+
+services:
+
+  router:
+    <<: *service-template
+    networks:
+      mesh_a:
+      mesh_b:
+    command: [
+      "-c", "/etc/zenohd/router.json"
+    ]
+
+  # Network A
+
+  peer_a_with_router:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - router
+    command: [
+      "-c", "/etc/zenohd/peer-with-router.json",
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  peer_a_without_router:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - peer_a_with_router
+    command: [
+      "-c", "/etc/zenohd/peer-without-router.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 10
+
+  client_a:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - peer_a_without_router
+    command: [
+      "-c", "/etc/zenohd/client-mesh.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  # Network B
+
+  peer_b_with_router:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - router
+    command: [
+      "-c", "/etc/zenohd/peer-with-router.json",
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  peer_b_without_router:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - peer_b_with_router
+    command: [
+      "-c", "/etc/zenohd/peer-without-router.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 8
+
+  client_b:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - peer_b_without_router
+    command: [
+      "-c", "/etc/zenohd/client-mesh.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
