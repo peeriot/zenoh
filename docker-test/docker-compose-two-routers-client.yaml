@@ -43,7 +43,7 @@ services:
       routers:
       mesh_a:
     command: [
-      "-c", "/etc/zenohd/router.json"
+      "-c", "/etc/zenohd/router-auto-connect.json"
     ]
 
   client_a:
@@ -64,7 +64,7 @@ services:
       routers:
       mesh_b:
     command: [
-      "-c", "/etc/zenohd/router.json"
+      "-c", "/etc/zenohd/router-auto-connect.json"
     ]
 
   client_b:

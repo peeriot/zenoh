@@ -1,6 +1,11 @@
 name: zenoh
 
 networks:
+  routers:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.1.0/24
   mesh_a:
     ipam:
       driver: default
@@ -16,8 +21,8 @@ x-service-template: &service-template
   build:
     context: .
     dockerfile: Dockerfile
-  environment:
-    - RUST_LOG=debug,zenoh_plugin_rest=trace
+  # environment:
+  #   - RUST_LOG=debug,zenoh_plugin_rest=trace
   expose:
     - 80
   restart: no
@@ -30,23 +35,37 @@ x-service-template: &service-template
 
 services:
 
-  router:
+  # Main Router
+
+  router_main:
     <<: *service-template
     networks:
-      mesh_a:
-      mesh_b:
+      routers:
+        ipv4_address: 172.20.1.2
     command: [
-      "-c", "/etc/zenohd/router-auto-connect.json"
+      "-c", "/etc/zenohd/router.json"
     ]
 
   # Network A
+
+  router_a:
+    <<: *service-template
+    networks:
+      routers:
+      mesh_a:
+    depends_on:
+      - router_main
+    command: [
+      "-c", "/etc/zenohd/router.json",
+      "--connect", "tcp/172.20.1.2:7447"
+    ]
 
   peer_a_with_router:
     <<: *service-template
     networks:
       mesh_a:
     depends_on:
-      - router
+      - router_a
     command: [
       "-c", "/etc/zenohd/peer-with-router.json",
     ]
@@ -65,7 +84,7 @@ services:
     ]
     deploy:
       mode: replicated
-      replicas: 10
+      replicas: 8
 
   client_a:
     <<: *service-template
@@ -82,12 +101,24 @@ services:
 
   # Network B
 
+  router_b:
+    <<: *service-template
+    networks:
+      routers:
+      mesh_b:
+    depends_on:
+      - router_main
+    command: [
+      "-c", "/etc/zenohd/router.json",
+      "--connect", "tcp/172.20.1.2:7447"
+    ]
+
   peer_b_with_router:
     <<: *service-template
     networks:
       mesh_b:
     depends_on:
-      - router
+      - router_b
     command: [
       "-c", "/etc/zenohd/peer-with-router.json",
     ]

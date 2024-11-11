@@ -29,7 +29,7 @@ services:
     networks:
       routers:
     command: [
-      "-c", "/etc/zenohd/router.json"
+      "-c", "/etc/zenohd/router-auto-connect.json"
     ]
 
   client:

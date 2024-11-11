@@ -3,7 +3,7 @@
     "scouting": {
         "multicast": {
             "enabled": true,
-            "autoconnect": [ ]
+            "autoconnect": [ "router" ]
         },
         "gossip": {
             "enabled": true

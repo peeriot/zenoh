@@ -33,4 +33,4 @@ services:
     ]
     deploy:
       mode: replicated
-      replicas: 5
+      replicas: 11
