@@ -101,7 +101,6 @@ use crate::{
         sample::{DataInfo, DataInfoIntoSample, Locality, QoS, Sample, SampleKind},
         selector::Selector,
         subscriber::{SubscriberKind, SubscriberState},
-        value::Value,
         Id,
     },
     net::{
@@ -109,6 +108,7 @@ use crate::{
         routing::dispatcher::face::Face,
         runtime::{Runtime, RuntimeBuilder},
     },
+    query::ReplyError,
     Config,
 };
 
@@ -1092,16 +1092,27 @@ impl SessionInner {
             } else {
                 primitives.send_close();
             }
+            // defer the cleanup of internal data structures by taking them out of the locked state
+            // this is needed because callbacks may contain entities which need to acquire the
+            // lock to be dropped, so callback must be dropped without the lock held
             let mut state = zwrite!(self.state);
-            state.queryables.clear();
-            state.subscribers.clear();
-            state.liveliness_subscribers.clear();
-            state.local_resources.clear();
-            state.remote_resources.clear();
+            let _queryables = std::mem::take(&mut state.queryables);
+            let _subscribers = std::mem::take(&mut state.subscribers);
+            let _liveliness_subscribers = std::mem::take(&mut state.liveliness_subscribers);
+            let _local_resources = std::mem::take(&mut state.local_resources);
+            let _remote_resources = std::mem::take(&mut state.remote_resources);
+            drop(state);
             #[cfg(feature = "unstable")]
             {
-                state.tokens.clear();
-                state.matching_listeners.clear();
+                // the lock from the outer scope cannot be reused because the declared variables
+                // would be undeclared at the end of the block, with the lock held, and we want
+                // to avoid that; so we reacquire the lock in the block
+                // anyway, it doesn't really matter, and this code will be cleaned up when the APIs
+                // will be stabilized.
+                let mut state = zwrite!(self.state);
+                let _tokens = std::mem::take(&mut state.tokens);
+                let _matching_listeners = std::mem::take(&mut state.matching_listeners);
+                drop(state);
             }
             Ok(())
         })
@@ -2032,7 +2043,7 @@ impl SessionInner {
         qos: QoS,
         destination: Locality,
         timeout: Duration,
-        value: Option<Value>,
+        value: Option<(ZBytes, Encoding)>,
         attachment: Option<ZBytes>,
         #[cfg(feature = "unstable")] source: SourceInfo,
         callback: Callback<Reply>,
@@ -2075,7 +2086,7 @@ impl SessionInner {
                                     }
                                 }
                                 query.callback.call(Reply {
-                                    result: Err(Value::new("Timeout", Encoding::ZENOH_STRING).into()),
+                                    result: Err(ReplyError::new("Timeout", Encoding::ZENOH_STRING)),
                                     #[cfg(feature = "unstable")]
                                     replier_id: Some(zid.into()),
                                 });
@@ -2124,8 +2135,8 @@ impl SessionInner {
                     ext_body: value.as_ref().map(|v| query::ext::QueryBodyType {
                         #[cfg(feature = "shared-memory")]
                         ext_shm: None,
-                        encoding: v.encoding.clone().into(),
-                        payload: v.payload.clone().into(),
+                        encoding: v.1.clone().into(),
+                        payload: v.0.clone().into(),
                     }),
                     ext_attachment,
                     ext_unknown: vec![],
@@ -2143,8 +2154,8 @@ impl SessionInner {
                 value.as_ref().map(|v| query::ext::QueryBodyType {
                     #[cfg(feature = "shared-memory")]
                     ext_shm: None,
-                    encoding: v.encoding.clone().into(),
-                    payload: v.payload.clone().into(),
+                    encoding: v.1.clone().into(),
+                    payload: v.0.clone().into(),
                 }),
                 attachment,
             );
@@ -2175,7 +2186,7 @@ impl SessionInner {
                                 std::mem::drop(state);
                                 tracing::debug!("Timeout on liveliness query {}! Send error and close.", id);
                                 query.callback.call(Reply {
-                                    result: Err(Value::new("Timeout", Encoding::ZENOH_STRING).into()),
+                                    result: Err(ReplyError::new("Timeout", Encoding::ZENOH_STRING)),
                                     #[cfg(feature = "unstable")]
                                     replier_id: Some(zid.into()),
                                 });
@@ -2278,10 +2289,7 @@ impl SessionInner {
         let mut query = Query {
             inner: query_inner,
             eid: 0,
-            value: body.map(|b| Value {
-                payload: b.payload.into(),
-                encoding: b.encoding.into(),
-            }),
+            value: body.map(|b| (b.payload.into(), b.encoding.into())),
             attachment,
         };
         for (eid, cb) in queryables {
@@ -2584,12 +2592,11 @@ impl Primitives for WeakSession {
                     Some(query) => {
                         let callback = query.callback.clone();
                         std::mem::drop(state);
-                        let value = Value {
-                            payload: e.payload.into(),
-                            encoding: e.encoding.into(),
-                        };
                         let new_reply = Reply {
-                            result: Err(value.into()),
+                            result: Err(ReplyError {
+                                payload: e.payload.into(),
+                                encoding: e.encoding.into(),
+                            }),
                             #[cfg(feature = "unstable")]
                             replier_id: e.ext_sinfo.map(|info| info.id.zid),
                         };

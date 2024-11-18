@@ -215,7 +215,7 @@ impl StageIn {
         let mut c_guard = self.mutex.current();
 
         macro_rules! zgetbatch_rets {
-            ($restore_sn:expr) => {
+            ($($restore_sn:stmt)?) => {
                 loop {
                     match c_guard.take() {
                         Some(batch) => break batch,
@@ -234,7 +234,7 @@ impl StageIn {
                                 if !deadline.wait(&self.s_ref) {
                                     // Still no available batch.
                                     // Restore the sequence number and drop the message
-                                    $restore_sn;
+                                    $($restore_sn)?
                                     return false;
                                 }
                                 c_guard = self.mutex.current();
@@ -262,7 +262,7 @@ impl StageIn {
         }
 
         // Get the current serialization batch.
-        let mut batch = zgetbatch_rets!({});
+        let mut batch = zgetbatch_rets!();
         // Attempt the serialization on the current batch
         let e = match batch.encode(&*msg) {
             Ok(_) => zretok!(batch, msg),
@@ -322,7 +322,9 @@ impl StageIn {
         let mut reader = self.fragbuf.reader();
         while reader.can_read() {
             // Get the current serialization batch
-            batch = zgetbatch_rets!(tch.sn.set(sn).unwrap());
+            // If deadline is reached, sequence number is incremented with `SeqNumGenerator::get`
+            // in order to break the fragment chain already sent.
+            batch = zgetbatch_rets!(let _ = tch.sn.get());
 
             // Serialize the message fragment
             match batch.encode((&mut reader, &mut fragment)) {
@@ -432,7 +434,7 @@ enum Pull {
 // Inner structure to keep track and signal backoff operations
 #[derive(Clone)]
 struct Backoff {
-    threshold: Duration,
+    threshold: MicroSeconds,
     last_bytes: BatchSize,
     atomic: Arc<AtomicBackoff>,
     // active: bool,
@@ -441,7 +443,7 @@ struct Backoff {
 impl Backoff {
     fn new(threshold: Duration, atomic: Arc<AtomicBackoff>) -> Self {
         Self {
-            threshold,
+            threshold: threshold.as_micros() as MicroSeconds,
             last_bytes: 0,
             atomic,
             // active: false,
@@ -484,14 +486,13 @@ impl StageOutIn {
         // Verify that we have not been doing backoff for too long
         let mut backoff = 0;
         if !pull {
-            let diff = LOCAL_EPOCH.elapsed().as_micros() as MicroSeconds
-                - self.backoff.atomic.first_write.load(Ordering::Relaxed);
-            let threshold = self.backoff.threshold.as_micros() as MicroSeconds;
+            let diff = (LOCAL_EPOCH.elapsed().as_micros() as MicroSeconds)
+                .saturating_sub(self.backoff.atomic.first_write.load(Ordering::Relaxed));
 
-            if diff >= threshold {
+            if diff >= self.backoff.threshold {
                 pull = true;
             } else {
-                backoff = threshold - diff;
+                backoff = self.backoff.threshold - diff;
             }
         }
 
