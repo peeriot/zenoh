@@ -1,0 +1,38 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(dirname $0)"
+DOCKER_DIR="$(readlink -f "$SCRIPT_DIR/..")"
+
+finish() {
+    cd "$OLD_PWD"
+}
+
+trap finish EXIT
+
+cd "$DOCKER_DIR/certs"
+
+rm -rf ca-cert.pem ca-key.pem
+
+create-intermediate-ca() {
+    PREFIX="$1"
+    DOMAIN="$2"
+
+    openssl genrsa -out "$PREFIX-key.pem" 4096
+    openssl req -new -key "$PREFIX-key.pem" -out "$PREFIX-req.pem" -subj "/CN=$DOMAIN/O=Peeriot/OU=$DOMAIN"
+    openssl x509 -req -in "$PREFIX-req.pem" -CA root-ca-cert.pem -CAkey root-ca-key.pem -CAcreateserial -out "$PREFIX-cert.pem" -days 36500 -sha256 -extensions v3_ca -extfile <(printf "[ v3_ca ]\nbasicConstraints=CA:TRUE\nkeyUsage=critical, digitalSignature, cRLSign, keyCertSign")
+
+    cat "$PREFIX-cert.pem" "root-ca-cert.pem" > "$PREFIX-chain.pem"
+}
+
+# Root CA
+echo "Create Root CA"
+openssl genrsa -out root-ca-key.pem 4096
+openssl req -x509 -new -nodes -key root-ca-key.pem -sha256 -days 36500 -out root-ca-cert.pem -subj "/CN=zenoh.peeriot.intra/O=Peeriot/OU=zenoh.peeriot.intra"
+
+# Mesh A Intermediate CA
+echo -e "\nCreate Mesh A CA"
+create-intermediate-ca "mesh-a-ca" "mesh-a.zenoh.peeriot.intra"
+
+# Mesh B Intermediate CA
+echo -e "\nCreate Mesh B CA"
+create-intermediate-ca "mesh-b-ca" "mesh-b.zenoh.peeriot.intra"

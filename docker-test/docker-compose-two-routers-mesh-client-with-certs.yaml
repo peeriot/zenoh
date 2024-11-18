@@ -1,0 +1,136 @@
+name: zenoh
+
+networks:
+  routers:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.1.0/24
+  mesh_a:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.2.0/24
+  mesh_b:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.3.0/24
+
+x-service-template: &service-template
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    - RUST_LOG=debug,zenoh_plugin_rest=trace
+  expose:
+    - 80
+  restart: no
+  stop_signal: SIGINT
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost/@" ]
+    interval: 3s
+    timeout: 10s
+    retries: 5
+
+services:
+
+  # Network A
+
+  router_a:
+    <<: *service-template
+    networks:
+      routers:
+      mesh_a:
+    command: [
+      "/entrypoint", "zenoh.peeriot.intra", "root-ca", "-c", "/etc/zenohd/router-auto-connect-tls.json"
+    ]
+
+  peer_a_with_router:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - router_a
+    command: [
+      "/entrypoint", "mesh-a.zenoh.peeriot.intra", "mesh-a-ca", "-c", "/etc/zenohd/peer-with-router-tls-a.json",
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  peer_a_without_router:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - peer_a_with_router
+    command: [
+      "/entrypoint", "mesh-a.zenoh.peeriot.intra", "mesh-a-ca", "-c", "/etc/zenohd/peer-without-router-tls-a.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 10
+
+  client_a:
+    <<: *service-template
+    networks:
+      mesh_a:
+    depends_on:
+      - peer_a_without_router
+    command: [
+      "/entrypoint", "mesh-a.zenoh.peeriot.intra", "mesh-a-ca", "-c", "/etc/zenohd/client-mesh-tls-a.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  # Network B
+
+  router_b:
+    <<: *service-template
+    networks:
+      routers:
+      mesh_b:
+    command: [
+      "/entrypoint", "zenoh.peeriot.intra", "root-ca", "-c", "/etc/zenohd/router-auto-connect-tls.json"
+    ]
+
+  peer_b_with_router:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - router_b
+    command: [
+      "/entrypoint", "mesh-b.zenoh.peeriot.intra", "mesh-b-ca", "-c", "/etc/zenohd/peer-with-router-tls-b.json",
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  peer_b_without_router:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - peer_b_with_router
+    command: [
+      "/entrypoint", "mesh-b.zenoh.peeriot.intra", "mesh-b-ca", "-c", "/etc/zenohd/peer-without-router-tls-b.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 8
+
+  client_b:
+    <<: *service-template
+    networks:
+      mesh_b:
+    depends_on:
+      - peer_b_without_router
+    command: [
+      "/entrypoint", "mesh-b.zenoh.peeriot.intra", "mesh-b-ca", "-c", "/etc/zenohd/client-mesh-tls-b.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2

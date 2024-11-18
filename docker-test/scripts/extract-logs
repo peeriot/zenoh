@@ -29,5 +29,5 @@ for CONTAINER in $(docker compose -f "$COMPOSE_FILE" ps -aq); do
     echo "  - ID: $CONTAINER"
     echo "  - Name: $NAME"
 
-    docker logs "$CONTAINER" > "$LOG_FILE"
+    docker logs "$CONTAINER" > "$LOG_FILE" 2>&1
 done

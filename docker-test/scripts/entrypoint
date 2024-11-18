@@ -1,0 +1,36 @@
+#!/bin/bash
+
+set -e
+
+DOMAIN="$1"
+shift
+
+CA_CERT="$1"
+shift
+
+terminate() {
+    echo "Caught termination signal, shutting down..."
+
+    kill -TERM "$child" 2>/dev/null
+    wait "$PID"
+
+    echo "Terminated gracefully."
+
+    exit 0
+}
+
+trap terminate SIGTERM SIGINT
+
+cd /etc/zenohd/certs
+
+openssl genrsa -out client-key.pem 4096
+openssl req -new -key client-key.pem -out client-req.pem -subj "/CN=$HOSTNAME.$DOMAIN/O=Peeriot/OU=$DOMAIN"
+openssl x509 -req -in client-req.pem -CA "$CA_CERT-cert.pem" -CAkey "$CA_CERT-key.pem" -CAcreateserial -out client-cert.pem -days 36500 -sha256 -extensions v3_req -extfile <(printf "[ v3_req ]\nbasicConstraints=CA:FALSE\nkeyUsage = digitalSignature, keyEncipherment\nextendedKeyUsage = serverAuth, clientAuth")
+cat "$CA_CERT-cert.pem" "root-ca-cert.pem" > ca-cert-chain.pem
+cat "client-cert.pem" "$CA_CERT-cert.pem" "root-ca-cert.pem" > client-cert-chain.pem
+
+zenohd "$@" &
+
+PID=$!
+
+wait "$PID"

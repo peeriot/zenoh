@@ -1,0 +1,103 @@
+{
+    "mode": "client",
+    "scouting": {
+        "multicast": {
+            "enabled": true,
+            "autoconnect": [ "peer" ]
+        },
+        "gossip": {
+            "enabled": false
+        }
+    },
+    "timestamping": {
+        "enabled": true
+    },
+    "transport": {
+        "unicast": {
+            "max_sessions": 2
+        },
+        "multicast": {
+            "max_sessions": 2
+        },
+        "link": {
+            "tls": {
+                "root_ca_certificate": "/etc/zenohd/certs/ca-cert-chain.pem",
+                "listen_private_key": "/etc/zenohd/certs/client-key.pem",
+                "listen_certificate": "/etc/zenohd/certs/client-cert.pem",
+                "enable_mtls": true
+            }
+        }
+    },
+    "plugins": {
+        "rest": {
+            "http_port": 80,
+            "__required__": true
+        }
+    },
+    "access_control": {
+        "enabled": false,
+        "default_permission": "deny",
+        "rules": [
+            {
+                "id": "allow-access-to-mesh-b",
+                "messages": [
+                    "put",
+                    "delete",
+                    "declare_subscriber",
+                    "query",
+                    "reply",
+                    "declare_queryable"
+                ],
+                "flows": [
+                    "egress",
+                    "ingress"
+                ],
+                "permission": "allow",
+                "key_exprs": [
+                    "peeriot/mesh-b/**"
+                ]
+            },
+            {
+                "id": "allow-access-to-all",
+                "messages": [
+                    "put",
+                    "delete",
+                    "declare_subscriber",
+                    "query",
+                    "reply",
+                    "declare_queryable"
+                ],
+                "flows": [
+                    "egress",
+                    "ingress"
+                ],
+                "permission": "allow",
+                "key_exprs": [
+                    "**"
+                ]
+            }
+        ],
+        "subjects": [
+            {
+                "id": "peers-of-mesh-b",
+                "cert_common_names": [
+                    "mesh-b.zenoh.peeriot.intra",
+                    "*.mesh-b.zenoh.peeriot.intra"
+                ]
+            },
+            {
+                "id": "peers-any"
+            }
+        ],
+        "policies": [
+            {
+                "rules": [
+                    "allow-access-to-mesh-b"
+                ],
+                "subjects": [
+                    "peers-of-mesh-b"
+                ]
+            }
+        ]
+    }
+}
