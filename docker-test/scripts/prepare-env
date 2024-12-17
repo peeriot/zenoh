@@ -1,0 +1,6 @@
+#!/bin/bash
+
+export RUST_LOG=info
+export TEST_NET_ADMIN=/home/bergmann/projects/peeriot/network-test-suite/target/debug/test-net-admin
+export COMPOSE_PROJECT_NAME=zenoh
+export COMPOSE_FILE=docker-compose-one-router-mesh-client.yaml

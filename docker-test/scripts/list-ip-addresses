@@ -1,0 +1,11 @@
+#!/bin/bash
+
+echo "ID Name Admin NetworkA NetworkB"
+
+for cntr in $(docker ps -aq --filter name=${COMPOSE_PROJECT_NAME}-\*); do
+    name=$(docker inspect "$cntr" | jq -r '.[0].Name')
+    addr_admin=$(docker inspect "$cntr" | jq -r ".[0].NetworkSettings.Networks.[\"${COMPOSE_PROJECT_NAME}_admin\"].IPAddress")
+    addr_network_a=$(docker inspect "$cntr" | jq -r ".[0].NetworkSettings.Networks.[\"${COMPOSE_PROJECT_NAME}_network_a\"].IPAddress")
+    addr_network_b=$(docker inspect "$cntr" | jq -r ".[0].NetworkSettings.Networks.[\"${COMPOSE_PROJECT_NAME}_network_b\"].IPAddress")
+    echo "$cntr $name $addr_admin $addr_network_a $addr_network_b"
+done

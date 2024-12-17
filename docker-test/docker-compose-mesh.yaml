@@ -29,7 +29,7 @@ services:
     networks:
       mesh:
     command: [
-      "-c", "/etc/zenohd/peer-without-router.json"
+      "zenohd", "--config", "/etc/zenohd/peer-without-router.json"
     ]
     deploy:
       mode: replicated

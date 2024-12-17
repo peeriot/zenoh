@@ -8,6 +8,8 @@ export TOPO_DIR="$DOCKER_DIR/topology"
 export NETWORK_DOT_FILE="$TOPO_DIR/network.dot"
 export NETWORK_PNG_FILE="$TOPO_DIR/network.png"
 
+DEFAULT_NETWORK_NAME="${COMPOSE_PROJECT_NAME}_admin"
+NETWORK_NAME="${NETWORK_NAME:-$DEFAULT_NETWORK_NAME}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 echo "Use compose file: $COMPOSE_FILE"
 
@@ -80,7 +82,7 @@ write_network "graph PeerNetwork {"
 for CONTAINER in $CONTAINERS; do
     echo "- Container:"
 
-    ADDRS=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}' $CONTAINER)
+    ADDRS=$(docker inspect -f "{{.NetworkSettings.Networks.$NETWORK_NAME.IPAddress}}" $CONTAINER)
     ADDRS="${ADDRS%,}"
     NAME=$(docker inspect -f '{{.Name}}' $CONTAINER)
     NAME="${NAME#/}"

@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM test-net-client
 
 COPY artifacts/zenohd /usr/local/bin/
 COPY artifacts/libzenoh_plugin_*.so /usr/local/lib/
@@ -9,9 +9,9 @@ COPY scripts/entrypoint /entrypoint
 RUN     apt-get update \
     &&  apt-get install -y \
             curl \
+            htop \
             openssl \
             tini \
     &&  rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT [ "/usr/bin/tini", "--" ]
 CMD [ "zenohd", "--config", "/etc/zenohd/config.json" ]

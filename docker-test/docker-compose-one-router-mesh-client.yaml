@@ -1,0 +1,298 @@
+name: zenoh
+
+networks:
+  admin:
+  network_a:
+  network_b:
+
+x-service-template: &service-template
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    - RUST_LOG=info
+  expose:
+    - 80
+  restart: no
+  stop_signal: SIGINT
+  cap_add:
+    - NET_ADMIN
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost/@" ]
+    interval: 3s
+    timeout: 10s
+    retries: 5
+
+# Services
+
+services:
+
+  #################
+  # Admin Network #
+  #################
+
+  # orchestrator for the traffic shaping rules
+  orchestrator:
+    image: "test-net-orchestrator"
+    hostname: "orchestrator"
+    stop_signal: SIGINT
+    command: [ "--network-prefix", "${COMPOSE_PROJECT_NAME}" ]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      admin:
+        aliases:
+          - orchestrator
+
+  ##########
+  # Router #
+  ##########
+
+  # Router that connects peers of network A with peers of network B
+  router:
+    <<: *service-template
+    networks:
+      admin:
+      network_a:
+      network_b:
+    command: [
+      "zenohd", "-c", "/etc/zenohd/router-auto-connect.json"
+    ]
+
+  ####################
+  # Network A (Star) #
+  ####################
+
+  # Peer that can connect to the router and other peers
+  peer_a_with_router:
+    <<: *service-template
+    networks:
+      admin:
+      network_a:
+    depends_on:
+      - router
+    command: [
+      "zenohd", "-c", "/etc/zenohd/peer-with-router.json",
+    ]
+    deploy:
+      mode: replicated
+      replicas: 1
+
+  # Peer that can only connect other peers
+  peer_a_without_router:
+    <<: *service-template
+    networks:
+      admin:
+      network_a:
+    depends_on:
+      - peer_a_with_router
+    command: [
+      "zenohd", "-c", "/etc/zenohd/peer-without-router.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 5
+
+  # Client that can connect to any other peer
+  client_a:
+    <<: *service-template
+    networks:
+      admin:
+      network_a:
+    depends_on:
+      - peer_a_without_router
+    command: [
+      "zenohd", "-c", "/etc/zenohd/client-mesh.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  ####################
+  # Network B (Ring) #
+  ####################
+
+  # Peer that can connect to the router and other peers
+  peer_b_with_router:
+    <<: *service-template
+    networks:
+      admin:
+      network_b:
+    depends_on:
+      - router
+    command: [
+      "zenohd", "-c", "/etc/zenohd/peer-with-router.json",
+    ]
+    deploy:
+      mode: replicated
+      replicas: 1
+
+  # Peer that can only connect other peers
+  peer_b_without_router:
+    <<: *service-template
+    networks:
+      admin:
+      network_b:
+    depends_on:
+      - peer_b_with_router
+    command: [
+      "zenohd", "-c", "/etc/zenohd/peer-without-router.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 5
+
+  # Client that can connect to any other peer
+  client_b:
+    <<: *service-template
+    networks:
+      admin:
+      network_b:
+    depends_on:
+      - peer_b_without_router
+    command: [
+      "zenohd", "-c", "/etc/zenohd/client-mesh.json"
+    ]
+    deploy:
+      mode: replicated
+      replicas: 2
+
+# Network Policies
+
+x-policies:
+
+  #################
+  # Admin Network #
+  #################
+
+  # Restrict connections to anyone
+  - target: "admin::any"
+    remote: "any"
+    egress: "drop"
+    ingress: "drop"
+
+  # Allow connections to the orchestrator and the gateways (host)
+  - target: "admin::any"
+    remote: "admin::orchestrator|.*::gateway"
+    egress: "accept"
+    ingress: "accept"
+
+  ####################
+  # Network A (Star) #
+  ####################
+
+  # Restrict connections to anyone in network A
+  - target: "network_a::any"
+    remote: "any"
+    egress: "drop"
+    ingress: "drop"
+
+  # Allow multicast for scouting
+  - target: "network_a::any"
+    remote: "224.0.0.0/4"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connections from peer_a_with_router to anyone in network A
+  - target: "network_a::peer_a_with_router.*"
+    remote: "network_a::any"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connections from anyone in network A to peer_a_with_router
+  - target: "network_a::any"
+    remote: "network_a::peer_a_with_router.*"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connections from client_a to anyone in network A
+  - target: "network_a::client_a.*"
+    remote: "network_a::any"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connections from anyone in network A to client_a
+  - target: "network_a::any"
+    remote: "network_a::client_a.*"
+    egress: "accept"
+    ingress: "accept"
+
+  ####################
+  # Network B (Ring) #
+  ####################
+
+  # Restrict connections to anyone in network B
+  - target: "network_b::any"
+    remote: "any"
+    egress: "drop"
+    ingress: "drop"
+
+  # Allow multicast for scouting
+  - target: "network_b::any"
+    remote: "224.0.0.0/4"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connection between router-1 and peer_b_with_router-1
+  - target: "network_b::(router-1|peer_b_with_router-1)"
+    remote: "network_b::(router-1|peer_b_with_router-1)"
+    egress: "accept"
+    ingress: "accept"
+    traffic-shaping:
+      latency: "100ms"
+      jitter: "10ms"
+
+  # Allow connection peer_b_with_router-1 and peer_b_without_router-1
+  - target: "network_b::(peer_b_with_router-1|peer_b_without_router-1)"
+    remote: "network_b::(peer_b_with_router-1|peer_b_without_router-1)"
+    egress: "accept"
+    ingress: "accept"
+    traffic-shaping:
+      latency: "200ms"
+      jitter: "20ms"
+
+  # Allow connection peer_b_without_router-1 and peer_b_without_router-2
+  - target: "network_b::peer_b_without_router-(1|2)"
+    remote: "network_b::peer_b_without_router-(1|2)"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connection peer_b_without_router-2 and peer_b_without_router-3
+  - target: "network_b::peer_b_without_router-(2|3)"
+    remote: "network_b::peer_b_without_router-(2|3)"
+    egress: "accept"
+    ingress: "accept"
+
+    # Allow connection peer_b_without_router-3 and peer_b_without_router-4
+  - target: "network_b::peer_b_without_router-(3|4)"
+    remote: "network_b::peer_b_without_router-(3|4)"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connection peer_b_without_router-4 and peer_b_without_router-5
+  - target: "network_b::peer_b_without_router-(4|5)"
+    remote: "network_b::peer_b_without_router-(4|5)"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connection peer_b_without_router-5 and peer_b_with_router-1
+  - target: "network_b::(peer_b_without_router-5|peer_b_with_router-1)"
+    remote: "network_b::(peer_b_without_router-5|peer_b_with_router-1)"
+    egress: "accept"
+    ingress: "accept"
+    traffic-shaping:
+      latency: "300ms"
+      jitter: "30ms"
+      packet-loss: "10%"
+
+  # Allow connections from anyone in network B to client_b
+  - target: "network_b::client_b.*"
+    remote: "network_b::any"
+    egress: "accept"
+    ingress: "accept"
+
+  # Allow connections from client_b to anyone in network B
+  - target: "network_b::any"
+    remote: "network_b::client_b.*"
+    egress: "accept"
+    ingress: "accept"
