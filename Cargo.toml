@@ -33,6 +33,7 @@ members = [
   "io/zenoh-link",
   "io/zenoh-link-commons",
   "io/zenoh-links/zenoh-link-quic/",
+  "io/zenoh-links/zenoh-link-bt-gatt",
   "io/zenoh-links/zenoh-link-serial",
   "io/zenoh-links/zenoh-link-tcp/",
   "io/zenoh-links/zenoh-link-tls/",
@@ -86,6 +87,7 @@ async-std = { version = "1.6.5", features = ["tokio1"] }
 async-trait = "0.1.82"
 base64 = "0.22.1"
 bincode = "1.3.3"
+bluer = "0.17.3"
 bytes = "1.7.1"
 clap = { version = "4.5.17", features = ["derive"] }
 console-subscriber = "0.4.0"
@@ -218,6 +220,7 @@ zenoh-link-udp = { version = "1.2.0", path = "io/zenoh-links/zenoh-link-udp" }
 zenoh-link-ws = { version = "1.2.0", path = "io/zenoh-links/zenoh-link-ws" }
 zenoh-link-unixpipe = { version = "1.2.0", path = "io/zenoh-links/zenoh-link-unixpipe" }
 zenoh-link-serial = { version = "1.2.0", path = "io/zenoh-links/zenoh-link-serial" }
+zenoh-link-bt-gatt = { version = "1.0.0-dev", path = "io/zenoh-links/zenoh-link-bt-gatt" }
 zenoh-link-vsock = { version = "1.2.0", path = "io/zenoh-links/zenoh-link-vsock" }
 zenoh-link = { version = "1.2.0", path = "io/zenoh-link" }
 zenoh-link-commons = { version = "1.2.0", path = "io/zenoh-link-commons" }
