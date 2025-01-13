@@ -238,18 +238,12 @@ x-policies:
     remote: "network_b::(router-1|peer_b_with_router-1)"
     egress: "accept"
     ingress: "accept"
-    traffic-shaping:
-      latency: "100ms"
-      jitter: "10ms"
 
   # Allow connection peer_b_with_router-1 and peer_b_without_router-1
   - target: "network_b::(peer_b_with_router-1|peer_b_without_router-1)"
     remote: "network_b::(peer_b_with_router-1|peer_b_without_router-1)"
     egress: "accept"
     ingress: "accept"
-    traffic-shaping:
-      latency: "200ms"
-      jitter: "20ms"
 
   # Allow connection peer_b_without_router-1 and peer_b_without_router-2
   - target: "network_b::peer_b_without_router-(1|2)"
@@ -280,10 +274,6 @@ x-policies:
     remote: "network_b::(peer_b_without_router-5|peer_b_with_router-1)"
     egress: "accept"
     ingress: "accept"
-    traffic-shaping:
-      latency: "300ms"
-      jitter: "30ms"
-      packet-loss: "10%"
 
   # Allow connections from anyone in network B to client_b
   - target: "network_b::client_b.*"
