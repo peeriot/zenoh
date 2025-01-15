@@ -36,12 +36,12 @@ env:
 
 jobs:
   check:
-    name: Lints and doc tests on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Lints and doc tests
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        os: [ ubuntu-latest, windows-latest, macos-13, macos-14 ]
 
     steps:
       - name: Clone this repository
@@ -87,7 +87,6 @@ jobs:
         run: cargo +stable clippy --all-targets --features unstable,test -- --deny warnings
 
       - name: Clippy all features
-        if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'macOS-latest' }}
         run: cargo +stable clippy --all-targets --all-features -- --deny warnings
 
       - name: Install generic no_std target
@@ -115,8 +114,8 @@ jobs:
         run: cargo +stable semver-checks --verbose --default-features --package zenoh --release-type ${{ env.CARGO_SEMVER_CHECKS_RELEASE_TYPE }} --baseline-version ${{ env.CARGO_SEMVER_CHECKS_BASELINE_VERSION }}
 
   test:
-    name: Unit tests on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Unit tests
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
@@ -132,34 +131,21 @@ jobs:
       - name: Setup rust-cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Set rustflags
-        shell: bash
-        run: |
-          case ${{ matrix.os }} in
-            *windows*) echo "RUSTFLAGS=-Clink-arg=/DEBUG:NONE" >> $GITHUB_ENV ;;
-          esac
-
       - name: Install latest nextest
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
         run: cargo nextest run -F test -F internal_config --exclude zenoh-examples --exclude zenoh-plugin-example --workspace
 
-      - name: Run tests with SHM
-        if: ${{ matrix.os == 'macOS-latest' || matrix.os == 'windows-latest' }}
-        run: cargo nextest run -F test -F shared-memory -F unstable -F internal_config -E 'not (test(test_default_features))' --exclude zenoh-examples --exclude zenoh-plugin-example --workspace
-
       - name: Run tests with SHM + unixpipe
-        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: cargo nextest run -F test -F shared-memory -F unstable -F internal_config -F transport_unixpipe -E 'not (test(test_default_features))' --exclude zenoh-examples --exclude zenoh-plugin-example --workspace
 
       - name: Check for feature leaks
-        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: cargo nextest run -p zenohd --no-default-features
 
   valgrind:
     name: Memory leak checks
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: check
     steps:
       - name: Clone this repository
@@ -179,7 +165,7 @@ jobs:
 
   typos:
     name: Typos Check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Clone this repository
         uses: actions/checkout@v4
@@ -188,7 +174,7 @@ jobs:
         uses: crate-ci/typos@master
 
   markdown_lint:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - uses: DavidAnson/markdownlint-cli2-action@v18
@@ -203,7 +189,7 @@ jobs:
   # job to signal whether all CI checks have passed.
   ci:
     name: CI status checks
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [check, test, valgrind, typos, markdown_lint]
     if: always()
     steps:
