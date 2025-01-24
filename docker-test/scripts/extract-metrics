@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -x
+
+SCRIPT_DIR="$(dirname $0)"
+DOCKER_DIR="$(readlink -f "$SCRIPT_DIR/..")"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+
+export DATA_DIR="$DOCKER_DIR/data"
+export METRICS_FILE="$DATA_DIR/metrics.json"
+
+mkdir -p "$DATA_DIR"
+
+TEST_NET_ADMIN="${TEST_NET_ADMIN:-test-net-admin}"
+
+ADDRESS=$(docker inspect $COMPOSE_PROJECT_NAME-orchestrator-1 | jq -r ".[0].NetworkSettings.Networks.[\"${COMPOSE_PROJECT_NAME}_admin\"].IPAddress")
+
+"$TEST_NET_ADMIN" \
+    --orchestrator "http://$ADDRESS:50051" \
+    --output "$METRICS_FILE" \
+    node metrics

@@ -1,4 +1,4 @@
-FROM test-net-client
+FROM test-net-node
 
 COPY artifacts/zenohd /usr/local/bin/
 COPY artifacts/libzenoh_plugin_*.so /usr/local/lib/

@@ -157,9 +157,18 @@ services:
       mode: replicated
       replicas: 2
 
+# Node Policies
+
+x-node-policies:
+  - target: "any"
+    metrics:
+      system-update-interval: 1sec
+      connections-update-interval: 2sec
+      latency-update-interval: 10sec
+
 # Network Policies
 
-x-policies:
+x-network-policies:
 
   #################
   # Admin Network #
