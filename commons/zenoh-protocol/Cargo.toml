@@ -36,9 +36,11 @@ std = [
 test = ["rand", "zenoh-buffers/test"]
 shared-memory = ["std", "zenoh-buffers/shared-memory"]
 stats = []
+defmt = ["dep:defmt", "zenoh-buffers/defmt", "uhlc/defmt"]
 
 [dependencies]
 const_format = { workspace = true }
+defmt = { workspace = true, optional = true }
 rand = { workspace = true, features = ["alloc", "getrandom"], optional = true }
 serde = { workspace = true, features = ["alloc"] }
 uhlc = { workspace = true, default-features = false }

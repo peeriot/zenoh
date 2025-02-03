@@ -62,6 +62,7 @@ pub mod id {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TransportMessageLowLatency {
     pub body: TransportBodyLowLatency,
 }
@@ -77,6 +78,7 @@ impl TryFrom<NetworkMessage> for TransportMessageLowLatency {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum TransportBodyLowLatency {
     Close(Close),
     KeepAlive(KeepAlive),
@@ -86,6 +88,7 @@ pub enum TransportBodyLowLatency {
 pub type TransportSn = u32;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PrioritySn {
     pub reliable: TransportSn,
     pub best_effort: TransportSn,
@@ -111,6 +114,7 @@ impl PrioritySn {
 
 // Zenoh messages at zenoh-transport level
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum TransportBody {
     InitSyn(InitSyn),
     InitAck(InitAck),
@@ -125,6 +129,7 @@ pub enum TransportBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TransportMessage {
     pub body: TransportBody,
     #[cfg(feature = "stats")]
@@ -264,6 +269,7 @@ pub mod ext {
     /// ```
     #[repr(transparent)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct QoSType<const ID: u8> {
         inner: u8,
     }
@@ -313,6 +319,7 @@ pub mod ext {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct PatchType<const ID: u8>(u8);
 
     impl<const ID: u8> PatchType<ID> {

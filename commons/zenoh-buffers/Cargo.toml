@@ -29,7 +29,9 @@ default = ["std"]
 shared-memory = []
 std = []
 test = ["rand"]
+defmt = ["dep:defmt", "zenoh-collections/defmt"]
 
 [dependencies]
+defmt = { workspace = true, optional = true, features = ["alloc"] }
 rand = { workspace = true, optional = true }
 zenoh-collections = { workspace = true, default-features = false }

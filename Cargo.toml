@@ -96,6 +96,7 @@ crc = "3.2.1"
 criterion = "0.5"
 crossbeam-utils = "0.8.20"
 crossbeam-queue = "0.3.12"
+defmt = { version = "0.3.8", features = ["alloc"] }
 derive_more = { version = "1.0.0", features = ["as_ref"] }
 derive-new = "0.7.0"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }

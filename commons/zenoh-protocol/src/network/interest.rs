@@ -139,6 +139,7 @@ pub mod flag {
 ///     - if A==1 then the replies SHOULD be aggregated
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Interest {
     pub id: InterestId,
     pub mode: InterestMode,
@@ -154,6 +155,7 @@ pub type DeclareRequestId = u32;
 pub type AtomicDeclareRequestId = AtomicU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum InterestMode {
     Final,
     Current,
@@ -240,6 +242,7 @@ impl Interest {
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InterestOptions {
     options: u8,
 }
