@@ -11,8 +11,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 use zenoh_core::{zasyncread, zasyncwrite};
-use zenoh_link_commons::{ConstructibleLinkManagerUnicast, LinkAuthId, LinkManagerUnicastTrait, LinkUnicast, LinkUnicastTrait, NewLinkChannelSender};
+use zenoh_link_commons::{
+    ConstructibleLinkManagerUnicast, LinkAuthId, LinkManagerUnicastTrait, LinkUnicast,
+    LinkUnicastTrait, NewLinkChannelSender,
+};
 use zenoh_protocol::core::{EndPoint, Locator};
 use zenoh_result::{zerror, ZResult};
 
@@ -300,16 +304,18 @@ impl ConstructibleLinkManagerUnicast<()> for LinkManagerUnicastBtGatt {
 impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
     async fn new_link(&self, endpoint: EndPoint) -> ZResult<LinkUnicast> {
         let device_name = endpoint.address().to_string();
-        
+
         // Attempt direct connection
         let link = Arc::new(find_device(device_name).await?);
-        
+
         Ok(LinkUnicast(link))
     }
 
     async fn new_listener(&self, endpoint: EndPoint) -> ZResult<Locator> {
         let _endpoint = endpoint;
-        unimplemented!("The BT GATT transport needs to implement listener locators as a BLE Peripheral");
+        unimplemented!(
+            "The BT GATT transport needs to implement listener locators as a BLE Peripheral"
+        );
     }
 
     async fn del_listener(&self, endpoint: &EndPoint) -> ZResult<()> {
@@ -348,9 +354,7 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
 }
 
 /// Attempts to discover and connect to the requested BLE device (using the name)
-async fn find_device(
-    device_name: String,
-) -> ZResult<LinkUnicastBtGatt> {
+async fn find_device(device_name: String) -> ZResult<LinkUnicastBtGatt> {
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     let src = adapter.alias().await?;
@@ -381,7 +385,7 @@ async fn find_device(
                         write_io,
                         notify_io,
                     };
-                    
+
                     return Ok(LinkUnicastBtGatt::new(Some(peripheral), &src, &device_name));
                 }
                 Err(e) => {
@@ -399,9 +403,9 @@ async fn find_device(
 }
 
 /// Tries to connect to the specified device making sure it contains the proper name and services
-/// 
+///
 /// # Returns
-/// 
+///
 /// A [`CharacteristicWriter`] and [`CharacteristicReader`] which can be used to RX/TX data
 async fn try_connect(
     device: &Device,
@@ -451,14 +455,15 @@ async fn try_connect(
     for service in services {
         let uuid = service.uuid().await?;
         tracing::trace!("Found service {}", uuid);
-        if uuid == bluer::id::Service::ComNordicsemiServiceUart.into() {
+        if uuid == Uuid::from(bluer::id::Service::ComNordicsemiServiceUart) {
             for char in service.characteristics().await? {
                 tracing::trace!("Found char {}", uuid);
                 let uuid = char.uuid().await?;
-                if uuid == bluer::id::Characteristic::ComNordicsemiCharacteristicUartRx.into() {
+                if uuid == Uuid::from(bluer::id::Characteristic::ComNordicsemiCharacteristicUartRx)
+                {
                     writer = Some(char.write_io().await?);
                 } else if uuid
-                    == bluer::id::Characteristic::ComNordicsemiCharacteristicUartTx.into()
+                    == Uuid::from(bluer::id::Characteristic::ComNordicsemiCharacteristicUartTx)
                 {
                     reader = Some(char.notify_io().await?);
                 }

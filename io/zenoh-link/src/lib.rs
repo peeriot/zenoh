@@ -20,6 +20,12 @@
 use std::collections::HashMap;
 
 use zenoh_config::Config;
+#[cfg(feature = "transport_bt_gatt")]
+pub use zenoh_link_bt_gatt as bt_gatt;
+#[cfg(feature = "transport_bt_gatt")]
+use zenoh_link_bt_gatt::{
+    BtGattLocatorInspector, LinkManagerUnicastBtGatt, BT_GATT_LOCATOR_PREFIX,
+};
 pub use zenoh_link_commons::*;
 #[cfg(feature = "transport_quic")]
 pub use zenoh_link_quic as quic;
@@ -31,10 +37,6 @@ use zenoh_link_quic::{
 pub use zenoh_link_serial as serial;
 #[cfg(feature = "transport_serial")]
 use zenoh_link_serial::{LinkManagerUnicastSerial, SerialLocatorInspector, SERIAL_LOCATOR_PREFIX};
-#[cfg(feature = "transport_bt_gatt")]
-pub use zenoh_link_bt_gatt as bt_gatt;
-#[cfg(feature = "transport_bt_gatt")]
-use zenoh_link_bt_gatt::{LinkManagerUnicastBtGatt, BtGattLocatorInspector, BT_GATT_LOCATOR_PREFIX};
 #[cfg(feature = "transport_tcp")]
 pub use zenoh_link_tcp as tcp;
 #[cfg(feature = "transport_tcp")]
