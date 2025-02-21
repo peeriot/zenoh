@@ -25,12 +25,14 @@ pub mod id {
 
 // Zenoh messages at scouting level
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ScoutingBody {
     Scout(Scout),
     Hello(HelloProto),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScoutingMessage {
     pub body: ScoutingBody,
     #[cfg(feature = "stats")]
