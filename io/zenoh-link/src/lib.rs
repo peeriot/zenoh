@@ -20,6 +20,12 @@
 use std::collections::HashMap;
 
 use zenoh_config::Config;
+#[cfg(feature = "transport_bt_gatt")]
+pub use zenoh_link_bt_gatt as bt_gatt;
+#[cfg(feature = "transport_bt_gatt")]
+use zenoh_link_bt_gatt::{
+    BtGattLocatorInspector, LinkManagerUnicastBtGatt, BT_GATT_LOCATOR_PREFIX,
+};
 pub use zenoh_link_commons::*;
 #[cfg(feature = "transport_quic")]
 pub use zenoh_link_quic as quic;
@@ -88,6 +94,8 @@ pub const PROTOCOLS: &[&str] = &[
     unixsock_stream::UNIXSOCKSTREAM_LOCATOR_PREFIX,
     #[cfg(feature = "transport_serial")]
     serial::SERIAL_LOCATOR_PREFIX,
+    #[cfg(feature = "transport_bt_gatt")]
+    bt_gatt::BT_GATT_LOCATOR_PREFIX,
     #[cfg(feature = "transport_unixpipe")]
     unixpipe::UNIXPIPE_LOCATOR_PREFIX,
     #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
@@ -110,6 +118,8 @@ pub struct LocatorInspector {
     unixsock_stream_inspector: UnixSockStreamLocatorInspector,
     #[cfg(feature = "transport_serial")]
     serial_inspector: SerialLocatorInspector,
+    #[cfg(feature = "transport_bt_gatt")]
+    bt_gatt_inspector: BtGattLocatorInspector,
     #[cfg(feature = "transport_unixpipe")]
     unixpipe_inspector: UnixPipeLocatorInspector,
     #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
@@ -164,6 +174,8 @@ impl LocatorInspector {
             WS_LOCATOR_PREFIX => self.ws_inspector.is_multicast(locator).await,
             #[cfg(feature = "transport_serial")]
             SERIAL_LOCATOR_PREFIX => self.serial_inspector.is_multicast(locator).await,
+            #[cfg(feature = "transport_bt_gatt")]
+            BT_GATT_LOCATOR_PREFIX => self.bt_gatt_inspector.is_multicast(locator).await,
             #[cfg(feature = "transport_unixpipe")]
             UNIXPIPE_LOCATOR_PREFIX => self.unixpipe_inspector.is_multicast(locator).await,
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
@@ -261,6 +273,10 @@ impl LinkManagerBuilderUnicast {
             #[cfg(feature = "transport_serial")]
             SERIAL_LOCATOR_PREFIX => {
                 Ok(std::sync::Arc::new(LinkManagerUnicastSerial::new(_manager)))
+            }
+            #[cfg(feature = "transport_bt_gatt")]
+            BT_GATT_LOCATOR_PREFIX => {
+                Ok(std::sync::Arc::new(LinkManagerUnicastBtGatt::new(_manager)))
             }
             #[cfg(feature = "transport_unixpipe")]
             UNIXPIPE_LOCATOR_PREFIX => {

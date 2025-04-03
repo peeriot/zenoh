@@ -32,5 +32,7 @@ description = "Internal crate for zenoh."
 default = ["std"]
 std = []
 test = []
+defmt = ["dep:defmt"]
 
 [dependencies]
+defmt = { workspace = true, optional = true, features = ["alloc"] }

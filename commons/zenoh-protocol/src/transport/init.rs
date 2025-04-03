@@ -117,6 +117,7 @@ pub mod flag {
 /// ZExtUnit
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InitSyn {
     pub version: u8,
     pub whatami: WhatAmI,
@@ -229,6 +230,7 @@ impl InitSyn {
 /// ZExtZ64
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InitAck {
     pub version: u8,
     pub whatami: WhatAmI,

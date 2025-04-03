@@ -82,6 +82,7 @@ pub mod flag {
 ///       In any case, the length of a message must not exceed 65535 bytes.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct KeepAlive;
 
 impl KeepAlive {
