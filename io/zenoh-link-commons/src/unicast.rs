@@ -133,4 +133,5 @@ pub enum LinkAuthId {
     UnixsockStream,
     Vsock,
     Ws,
+    Ble,
 }
