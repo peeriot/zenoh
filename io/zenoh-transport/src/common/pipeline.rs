@@ -168,7 +168,10 @@ impl WaitTime {
 
     fn advance(&mut self, instant: &mut Instant) {
         // grow wait_time exponentially
-        self.wait_time = self.wait_time.saturating_mul(2);
+        self.wait_time = self
+            .wait_time
+            .saturating_mul(2)
+            .min(Duration::from_secs(60 * 60));
 
         // check for waiting limits
         match &mut self.max_wait_time {
