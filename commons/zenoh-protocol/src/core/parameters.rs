@@ -245,6 +245,7 @@ pub fn rand(into: &mut String) {
 /// assert_eq!(p, pi);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Parameters<'s>(Cow<'s, str>);
 
 impl<'s> Parameters<'s> {
