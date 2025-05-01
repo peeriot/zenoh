@@ -42,14 +42,13 @@ impl From<std::io::Error> for Error {
     }
 }
 
-struct GattPeripheral {
-    device: Device,
-    write_io: CharacteristicWriter,
-    notify_io: CharacteristicReader,
-}
-
 struct LinkUnicastBtGatt {
-    gatt_peripheral: Arc<Mutex<Option<GattPeripheral>>>,
+    /// Handle to the GATT Device
+    device: Arc<Mutex<Option<Device>>>,
+    /// Handler to the Characteristic Writer used for writing bytes
+    char_writer: Arc<Mutex<Option<CharacteristicWriter>>>,
+    /// Handler to the Characteristic Reader used for reading bytes
+    char_reader: Arc<Mutex<Option<CharacteristicReader>>>,
     // The BT advertised name to use as locator
     src_locator: Locator,
     // The serial destination path (random UUIDv4)
@@ -60,9 +59,17 @@ unsafe impl Send for LinkUnicastBtGatt {}
 unsafe impl Sync for LinkUnicastBtGatt {}
 
 impl LinkUnicastBtGatt {
-    fn new(gatt_peripheral: Option<GattPeripheral>, src_path: &str, dst_path: &str) -> Self {
+    fn new(
+        device: Device,
+        char_reader: CharacteristicReader,
+        char_writer: CharacteristicWriter,
+        src_path: &str,
+        dst_path: &str,
+    ) -> Self {
         Self {
-            gatt_peripheral: Arc::new(Mutex::new(gatt_peripheral)),
+            device: Arc::new(Mutex::new(Some(device))),
+            char_reader: Arc::new(Mutex::new(Some(char_reader))),
+            char_writer: Arc::new(Mutex::new(Some(char_writer))),
             src_locator: Locator::new(BT_GATT_LOCATOR_PREFIX, src_path, "").unwrap(),
             dst_locator: Locator::new(BT_GATT_LOCATOR_PREFIX, dst_path, "").unwrap(),
         }
@@ -72,13 +79,22 @@ impl LinkUnicastBtGatt {
 #[async_trait]
 impl LinkUnicastTrait for LinkUnicastBtGatt {
     fn get_mtu(&self) -> u16 {
-        match self.gatt_peripheral.try_lock() {
-            Ok(ref mut peripheral) => peripheral
-                .as_mut()
-                .map(|port| port.write_io.mtu().min(port.notify_io.mtu()) as u16)
-                .unwrap_or(BT_GATT_MAX_MTU),
-            Err(_) => BT_GATT_MAX_MTU,
-        }
+        let r_mtu = self
+            .char_reader
+            .try_lock()
+            .ok()
+            .and_then(|r| r.as_ref().map(|r| r.mtu()));
+        let w_mtu = self
+            .char_writer
+            .try_lock()
+            .ok()
+            .and_then(|w| w.as_ref().map(|w| w.mtu()));
+
+        // If we can't lock and find the true MTU, it's not a big deal
+        r_mtu
+            .zip(w_mtu)
+            .map(|(r_mtu, w_mtu)| r_mtu.min(w_mtu) as u16)
+            .unwrap_or(BT_GATT_MAX_MTU)
     }
 
     #[inline(always)]
@@ -113,10 +129,8 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
     }
 
     async fn write(&self, buffer: &[u8]) -> ZResult<usize> {
-        let mut peripheral = self.gatt_peripheral.lock().await;
-
-        match peripheral.as_mut() {
-            Some(peripheral) => peripheral.write_io.write(buffer).await.map_err(|e| {
+        match self.char_writer.lock().await.as_mut() {
+            Some(writer) => writer.write(buffer).await.map_err(|e| {
                 let e = zerror!("Unable to write on BT GATT link {}: {}", self, e);
                 tracing::error!("{}", e);
 
@@ -132,10 +146,8 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
     }
 
     async fn write_all(&self, buffer: &[u8]) -> ZResult<()> {
-        let mut peripheral = self.gatt_peripheral.lock().await;
-
-        match peripheral.as_mut() {
-            Some(peripheral) => peripheral.write_io.write_all(buffer).await.map_err(|e| {
+        match self.char_writer.lock().await.as_mut() {
+            Some(writer) => writer.write_all(buffer).await.map_err(|e| {
                 let e = zerror!("Unable to write on BT GATT link {}: {}", self, e);
                 tracing::error!("{}", e);
 
@@ -154,11 +166,9 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
     }
 
     async fn read(&self, buffer: &mut [u8]) -> ZResult<usize> {
-        let mut peripheral = self.gatt_peripheral.lock().await;
-
-        match peripheral.as_mut() {
-            Some(peripheral) => {
-                let res = peripheral.notify_io.read(buffer).await.map_err(|e| {
+        match self.char_reader.lock().await.as_mut() {
+            Some(reader) => {
+                let res = reader.read(buffer).await.map_err(|e| {
                     let e = zerror!("Unable to read from BT GATT link {}: {}", self, e);
                     tracing::error!("{}", e);
 
@@ -188,21 +198,14 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
     }
 
     async fn read_exact(&self, buffer: &mut [u8]) -> ZResult<()> {
-        let mut peripheral = self.gatt_peripheral.lock().await;
+        match self.char_reader.lock().await.as_mut() {
+            Some(reader) => {
+                let res = reader.read_exact(buffer).await.map(|_| ()).map_err(|e| {
+                    let e = zerror!("Unable to read from BT GATT link {}: {}", self, e);
+                    tracing::error!("{}", e);
 
-        match peripheral.as_mut() {
-            Some(peripheral) => {
-                let res = peripheral
-                    .notify_io
-                    .read_exact(buffer)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| {
-                        let e = zerror!("Unable to read from BT GATT link {}: {}", self, e);
-                        tracing::error!("{}", e);
-
-                        e.into()
-                    });
+                    e.into()
+                });
 
                 res
             }
@@ -219,16 +222,13 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
     }
 
     async fn close(&self) -> ZResult<()> {
-        let peripheral = self.gatt_peripheral.lock().await;
-
-        if let Some(peripheral) = peripheral.as_ref() {
-            if peripheral
-                .device
+        if let Some(device) = self.device.lock().await.as_mut() {
+            if device
                 .is_connected()
                 .await
                 .expect("Can't check if the peripheral is connected")
             {
-                peripheral.device.disconnect().await.map_err(|e| {
+                device.disconnect().await.map_err(|e| {
                     let e = zerror!("Unable to close BT GATT link {}: {}", self, e);
                     tracing::error!("{}", e);
                     e
@@ -380,13 +380,13 @@ async fn find_device(device_name: String) -> ZResult<LinkUnicastBtGatt> {
 
             match try_connect(&device, device_name.clone()).await {
                 Ok((write_io, notify_io)) => {
-                    let peripheral = GattPeripheral {
+                    return Ok(LinkUnicastBtGatt::new(
                         device,
-                        write_io,
                         notify_io,
-                    };
-
-                    return Ok(LinkUnicastBtGatt::new(Some(peripheral), &src, &device_name));
+                        write_io,
+                        &src,
+                        &device_name,
+                    ));
                 }
                 Err(e) => {
                     let e = zerror!("Not our device: {:?}", e);
