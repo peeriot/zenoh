@@ -20,6 +20,7 @@ use crate::common::ZExtUnknown;
 /// The kind of consolidation to apply to a query.
 #[repr(u8)]
 #[derive(Debug, Default, Clone, PartialEq, Eq, Copy, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ConsolidationMode {
     /// Apply automatic consolidation based on queryable's preferences
     #[default]
@@ -34,7 +35,7 @@ pub enum ConsolidationMode {
     /// Note that this doesn't cause re-ordering, but drops the samples for which a more recent timestamp has already
     /// been observed with the same key.
     Monotonic,
-    /// Holds back samples to only send the set of samples that had the highest timestamp for their key.    
+    /// Holds back samples to only send the set of samples that had the highest timestamp for their key.
     Latest,
     // Remove the duplicates of any samples based on the their timestamp.
     // Unique,
@@ -80,6 +81,7 @@ pub mod flag {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Query {
     pub consolidation: ConsolidationMode,
     pub parameters: String,

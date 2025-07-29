@@ -26,6 +26,7 @@ pub type EncodingId = u16;
 /// of the API as per user convenience. That mapping has no impact on the Zenoh protocol definition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(Hash))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Encoding {
     pub id: EncodingId,
     pub schema: Option<ZSlice>,

@@ -36,12 +36,14 @@ pub mod id {
 
 // DataInfo
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DataInfo {
     pub encoding: Encoding,
 }
 
 // Push
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PushBody {
     Put(Put),
     Del(Del),
@@ -76,6 +78,7 @@ impl From<Del> for PushBody {
 
 // Request
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum RequestBody {
     Query(Query),
 }
@@ -102,6 +105,7 @@ impl From<Query> for RequestBody {
 
 // Response
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ResponseBody {
     Reply(Reply),
     Err(Err),
@@ -151,6 +155,7 @@ pub mod ext {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct SourceInfoType<const ID: u8> {
         pub id: EntityGlobalIdProto,
         pub sn: u32,
@@ -173,6 +178,7 @@ pub mod ext {
     /// +-+-+-+-+-+-+-+-+
     #[cfg(feature = "shared-memory")]
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct ShmType<const ID: u8>;
 
     #[cfg(feature = "shared-memory")]
@@ -202,6 +208,7 @@ pub mod ext {
     ///  +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct ValueType<const VID: u8, const SID: u8> {
         #[cfg(feature = "shared-memory")]
         pub ext_shm: Option<ShmType<{ SID }>>,
@@ -244,6 +251,7 @@ pub mod ext {
     ///       ...         -- N times (key, value) tuples
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct AttachmentType<const ID: u8> {
         pub buffer: ZBuf,
     }

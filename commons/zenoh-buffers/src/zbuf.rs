@@ -29,6 +29,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Default, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZBuf {
     slices: SingleOrVec<ZSlice>,
 }
@@ -173,12 +174,14 @@ where
 
 // Reader
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZBufPos {
     slice: usize,
     byte: usize,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZBufReader<'a> {
     inner: &'a ZBuf,
     cursor: ZBufPos,
@@ -426,6 +429,7 @@ impl io::Seek for ZBufReader<'_> {
 }
 
 // ZSlice iterator
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZBufSliceIterator<'a, 'b> {
     reader: &'a mut ZBufReader<'b>,
     remaining: usize,
@@ -480,6 +484,7 @@ impl Iterator for ZBufSliceIterator<'_, '_> {
 
 // Writer
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZBufWriter<'a> {
     inner: NonNull<ZBuf>,
     zslice_writer: Option<ZSliceWriter<'a>>,

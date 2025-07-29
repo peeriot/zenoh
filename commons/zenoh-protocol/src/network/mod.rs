@@ -46,6 +46,7 @@ pub mod id {
 
 #[repr(u8)]
 #[derive(Debug, Default, Clone, Copy, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Mapping {
     #[default]
     Receiver = 0,
@@ -70,6 +71,7 @@ impl Mapping {
 
 // Zenoh messages at zenoh-network level
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum NetworkBody {
     Push(Push),
     Request(Request),
@@ -103,6 +105,7 @@ pub enum NetworkBodyMut<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct NetworkMessage {
     pub body: NetworkBody,
     pub reliability: Reliability,
@@ -395,6 +398,7 @@ pub mod ext {
     /// ```
     #[repr(transparent)]
     #[derive(Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct QoSType<const ID: u8> {
         inner: u8,
     }
@@ -542,6 +546,7 @@ pub mod ext {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct TimestampType<const ID: u8> {
         pub timestamp: uhlc::Timestamp,
     }
@@ -568,6 +573,7 @@ pub mod ext {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct NodeIdType<const ID: u8> {
         pub node_id: u16,
     }
@@ -616,6 +622,7 @@ pub mod ext {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct EntityGlobalIdType<const ID: u8> {
         pub zid: ZenohIdProto,
         pub eid: EntityId,
