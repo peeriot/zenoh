@@ -50,6 +50,7 @@ pub mod flag {
 /// +---------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Declare {
     pub interest_id: Option<super::interest::InterestId>,
     pub ext_qos: ext::QoSType,
@@ -91,6 +92,7 @@ pub mod id {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DeclareBody {
     DeclareKeyExpr(DeclareKeyExpr),
     UndeclareKeyExpr(UndeclareKeyExpr),
@@ -169,6 +171,7 @@ pub mod common {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DeclareFinal;
 
     impl DeclareFinal {
@@ -198,6 +201,7 @@ pub mod common {
         /// ```
         pub type WireExprExt = zextzbuf!(0x0f, true);
         #[derive(Debug, Clone, PartialEq, Eq)]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
         pub struct WireExprType {
             pub wire_expr: WireExpr<'static>,
         }
@@ -257,6 +261,7 @@ pub mod keyexpr {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DeclareKeyExpr {
         pub id: ExprId,
         pub wire_expr: WireExpr<'static>,
@@ -292,6 +297,7 @@ pub mod keyexpr {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct UndeclareKeyExpr {
         pub id: ExprId,
     }
@@ -344,6 +350,7 @@ pub mod subscriber {
     /// - if R==1 then the subscription is reliable, else it is best effort    ///
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DeclareSubscriber {
         pub id: SubscriberId,
         pub wire_expr: WireExpr<'static>,
@@ -379,6 +386,7 @@ pub mod subscriber {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct UndeclareSubscriber {
         pub id: SubscriberId,
         pub ext_wire_expr: common::ext::WireExprType,
@@ -436,6 +444,7 @@ pub mod queryable {
     /// - if D==1 then the queryable distance is present
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DeclareQueryable {
         pub id: QueryableId,
         pub wire_expr: WireExpr<'static>,
@@ -462,6 +471,7 @@ pub mod queryable {
         /// +---------------+
         /// ```
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
         pub struct QueryableInfoType {
             pub complete: bool, // Default false: incomplete
             pub distance: u16,  // Default 0: distance is null (e.g. intra-process communication)
@@ -527,6 +537,7 @@ pub mod queryable {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct UndeclareQueryable {
         pub id: QueryableId,
         pub ext_wire_expr: common::ext::WireExprType,
@@ -579,6 +590,7 @@ pub mod token {
     ///
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DeclareToken {
         pub id: TokenId,
         pub wire_expr: WireExpr<'static>,
@@ -614,6 +626,7 @@ pub mod token {
     /// +---------------+
     /// ```
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct UndeclareToken {
         pub id: TokenId,
         pub ext_wire_expr: common::ext::WireExprType,

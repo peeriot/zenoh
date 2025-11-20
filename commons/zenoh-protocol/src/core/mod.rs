@@ -61,6 +61,7 @@ pub use parameters::Parameters;
 /// The global unique id of a zenoh peer.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZenohIdProto(uhlc::ID);
 
 impl ZenohIdProto {
@@ -94,6 +95,7 @@ impl Default for ZenohIdProto {
 
 // Mimics uhlc::SizeError,
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SizeError(usize);
 
 #[cfg(feature = "std")]
@@ -281,6 +283,7 @@ pub type EntityId = u32;
 
 /// The global unique id of a zenoh entity.
 #[derive(Debug, Default, Copy, Clone, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct EntityGlobalIdProto {
     pub zid: ZenohIdProto,
     pub eid: EntityId,
@@ -300,6 +303,7 @@ impl EntityGlobalIdProto {
 
 #[repr(u8)]
 #[derive(Debug, Default, Copy, Clone, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Priority {
     Control = 0,
     RealTime = 1,
@@ -314,6 +318,7 @@ pub enum Priority {
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize)]
 /// A [`Priority`] range bounded inclusively below and above.
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PriorityRange(RangeInclusive<Priority>);
 
 impl Deref for PriorityRange {
@@ -361,6 +366,7 @@ impl Display for PriorityRange {
 }
 
 #[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum InvalidPriorityRange {
     InvalidSyntax { found: String },
     InvalidBound { message: String },
@@ -461,6 +467,7 @@ impl TryFrom<u8> for Priority {
 /// Reliability guarantees for message delivery.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Reliability {
     /// Messages may be lost.
     BestEffort = 0,
@@ -513,6 +520,7 @@ impl Display for Reliability {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InvalidReliability {
     found: String,
 }
@@ -555,6 +563,7 @@ impl FromStr for Reliability {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Channel {
     pub priority: Priority,
     pub reliability: Reliability,
@@ -570,6 +579,7 @@ impl Channel {
 /// Congestion control strategy.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[repr(u8)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CongestionControl {
     #[default]
     /// When transmitting a message in a node with a full queue, the node may drop the message.

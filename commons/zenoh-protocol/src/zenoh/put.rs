@@ -46,6 +46,7 @@ pub mod flag {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Put {
     pub timestamp: Option<Timestamp>,
     pub encoding: Encoding,

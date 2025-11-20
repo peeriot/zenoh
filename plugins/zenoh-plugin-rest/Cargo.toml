@@ -27,6 +27,7 @@ version = { workspace = true }
 default = ["dynamic_plugin", "zenoh/default"]
 dynamic_plugin = []
 static_plugin = ['async-std']
+transport-bt-gatt = ["zenoh/transport_bt_gatt"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

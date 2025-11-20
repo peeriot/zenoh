@@ -46,6 +46,7 @@ pub mod flag {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Response {
     pub rid: RequestId,
     pub wire_expr: WireExpr<'static>,
@@ -115,6 +116,7 @@ impl Response {
 /// (*) The resolution of the request id is negotiated during the session establishment.
 ///     This implementation limits the resolution to 32bit.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ResponseFinal {
     pub rid: RequestId,
     pub ext_qos: ext::QoSType,
