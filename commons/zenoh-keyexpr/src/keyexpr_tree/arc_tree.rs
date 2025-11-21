@@ -12,13 +12,12 @@
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
 
-use alloc::{
-    string::String,
-    sync::{Arc, Weak},
-};
+use alloc::string::String;
 use core::fmt::Debug;
 
 use token_cell::prelude::*;
+
+use zenoh_buffers::{Arc, Weak};
 
 use super::{box_tree::PruneResult, support::IterOrOption};
 use crate::{
@@ -443,10 +442,11 @@ where
 }
 
 pub(crate) mod sealed {
-    use alloc::sync::Arc;
     use core::ops::{Deref, DerefMut};
 
     use token_cell::prelude::{TokenCell, TokenTrait};
+
+    use zenoh_buffers::Arc;
 
     pub struct Tokenized<A, B>(pub A, pub(crate) B);
     impl<T, Token: TokenTrait> Deref for Tokenized<&TokenCell<T, Token>, &Token> {
