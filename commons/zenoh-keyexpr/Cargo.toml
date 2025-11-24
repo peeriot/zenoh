@@ -27,7 +27,7 @@ version = { workspace = true }
 default = ["std"]
 internal = []
 js = ["getrandom/js"]
-std = ["dep:schemars", "zenoh-result/std"]
+std = ["dep:schemars", "zenoh-buffers/std", "zenoh-result/std"]
 unstable = []
 
 [dependencies]
@@ -36,13 +36,14 @@ rand = { workspace = true, features = ["alloc", "getrandom"] }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, features = ["alloc"] }
 token-cell = { workspace = true }
+zenoh-buffers = { workspace = true }
 zenoh-result = { workspace = true }
 # NOTE: getrandom needs to be explicitly added here in order to enable the `js` feature when compiling the rand crate to WASM
 # more information: https://docs.rs/getrandom/latest/getrandom/#webassembly-support 
 getrandom = { workspace = true }
-
-[target.'cfg(not(features = "std"))'.dependencies]
 hashbrown = { workspace = true }
+once_cell = { workspace = true, features = ["critical-section"] }
+ahash = { workspace = true, features = ["atomic-polyfill"] }
 
 # NOTE: May cause problems when testing no_std stuff. Check this tool: https://docs.rs/crate/cargo-no-dev-deps/0.1.0
 [dev-dependencies]

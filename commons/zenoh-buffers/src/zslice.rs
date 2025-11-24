@@ -11,7 +11,7 @@
 // Contributors:
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     any::Any,
     fmt, iter,
@@ -23,6 +23,7 @@ use crate::{
     buffer::{Buffer, SplitBuffer},
     reader::{BacktrackableReader, DidntRead, HasReader, Reader},
     writer::{BacktrackableWriter, DidntWrite, Writer},
+    Arc,
     ZBuf,
 };
 
@@ -74,6 +75,25 @@ impl<const N: usize> ZSliceBuffer for [u8; N] {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+/// Convert a value implementing `ZSliceBuffer` into an `Arc<dyn ZSliceBuffer>`.
+///
+/// See https://github.com/taiki-e/portable-atomic/issues/143#issuecomment-1866488569
+pub fn zslice_buffer_arc<T>(value: T) -> Arc<dyn ZSliceBuffer + 'static>
+where
+    T: ZSliceBuffer + 'static,
+{
+    #[cfg(target_has_atomic = "ptr")]
+    {
+        Arc::new(value)
+    }
+
+    #[cfg(not(target_has_atomic = "ptr"))]
+    {
+        let boxed: Box<dyn ZSliceBuffer + 'static> = Box::new(value);
+        Arc::from(boxed)
     }
 }
 
@@ -133,7 +153,7 @@ impl ZSlice {
 
     #[inline]
     pub fn empty() -> Self {
-        Self::new(Arc::new(Vec::<u8>::new()), 0, 0).unwrap()
+        Self::new(zslice_buffer_arc(Vec::<u8>::new()), 0, 0).unwrap()
     }
 
     #[inline]
@@ -256,6 +276,7 @@ impl fmt::Debug for ZSlice {
 }
 
 // From impls
+#[cfg(target_has_atomic = "ptr")]
 impl<T> From<Arc<T>> for ZSlice
 where
     T: ZSliceBuffer + 'static,
@@ -272,12 +293,25 @@ where
     }
 }
 
+impl From<Arc<dyn ZSliceBuffer + 'static>> for ZSlice {
+    fn from(buf: Arc<dyn ZSliceBuffer + 'static>) -> Self {
+        let end = buf.as_slice().len();
+        Self {
+            buf,
+            start: 0,
+            end,
+            #[cfg(feature = "shared-memory")]
+            kind: ZSliceKind::Raw,
+        }
+    }
+}
+
 impl<T> From<T> for ZSlice
 where
     T: ZSliceBuffer + 'static,
 {
     fn from(buf: T) -> Self {
-        Self::from(Arc::new(buf))
+        Self::from(zslice_buffer_arc(buf))
     }
 }
 

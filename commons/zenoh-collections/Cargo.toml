@@ -35,5 +35,5 @@ test = []
 defmt = ["dep:defmt"]
 
 [dependencies]
-ahash = { workspace = true }
+ahash = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true, features = ["alloc"] }
