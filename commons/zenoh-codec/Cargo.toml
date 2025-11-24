@@ -44,6 +44,7 @@ uhlc = { workspace = true }
 zenoh-buffers = { workspace = true, default-features = false }
 zenoh-protocol = { workspace = true }
 zenoh-shm = { workspace = true, optional = true }
+spin = { workspace = true, features = ["portable-atomic"] } # uhlc uses this but does not re-export portable-atomic as a feature
 
 # INFO: May cause problems when testing no_std stuff. Check this tool: https://docs.rs/crate/cargo-no-dev-deps/0.1.0
 [dev-dependencies]

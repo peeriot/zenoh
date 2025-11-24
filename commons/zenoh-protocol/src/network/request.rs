@@ -11,7 +11,7 @@
 // Contributors:
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
-use core::sync::atomic::AtomicU32;
+use portable_atomic::AtomicU32;
 
 use zenoh_buffers::buffer::Buffer;
 

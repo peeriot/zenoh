@@ -11,7 +11,7 @@
 // Contributors:
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 use core::{cmp, iter, num::NonZeroUsize, ptr::NonNull};
 #[cfg(feature = "std")]
 use std::io;
@@ -25,7 +25,7 @@ use crate::{
         SiphonableReader,
     },
     writer::{BacktrackableWriter, DidntWrite, HasWriter, Writer},
-    ZSlice, ZSliceBuffer, ZSliceWriter,
+    Arc, ZSlice, ZSliceBuffer, ZSliceWriter,
 };
 
 #[derive(Debug, Clone, Default, Eq)]
@@ -154,11 +154,19 @@ impl From<ZSlice> for ZBuf {
     }
 }
 
+#[cfg(target_has_atomic = "ptr")]
 impl<T> From<Arc<T>> for ZBuf
 where
     T: ZSliceBuffer + 'static,
 {
     fn from(t: Arc<T>) -> Self {
+        let zslice: ZSlice = t.into();
+        Self::from(zslice)
+    }
+}
+
+impl From<Arc<dyn ZSliceBuffer + 'static>> for ZBuf {
+    fn from(t: Arc<dyn ZSliceBuffer + 'static>) -> Self {
         let zslice: ZSlice = t.into();
         Self::from(zslice)
     }
