@@ -24,11 +24,13 @@ extern crate alloc;
 
 mod bbuf;
 mod slice;
+mod sync;
 pub mod vec;
 mod zbuf;
 mod zslice;
 
 pub use bbuf::*;
+pub use sync::*;
 pub use zbuf::*;
 pub use zslice::*;
 
