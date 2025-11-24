@@ -46,6 +46,7 @@ defmt = { workspace = true, optional = true }
 rand = { workspace = true, features = ["alloc", "getrandom"], optional = true }
 serde = { workspace = true, features = ["alloc"] }
 uhlc = { workspace = true, default-features = false }
+portable-atomic = { workspace = true }
 zenoh-buffers = { workspace = true, default-features = false }
 zenoh-keyexpr = { workspace = true }
 zenoh-macros = { workspace = true }

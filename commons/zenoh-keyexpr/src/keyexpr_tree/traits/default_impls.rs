@@ -12,9 +12,11 @@
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
 
-use alloc::{boxed::Box, sync::Arc};
+use alloc::boxed::Box;
 
 use token_cell::prelude::{TokenCell, TokenCellTrait, TokenTrait};
+
+use zenoh_buffers::Arc;
 
 use super::*;
 

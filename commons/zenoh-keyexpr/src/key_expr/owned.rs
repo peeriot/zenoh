@@ -14,13 +14,15 @@
 extern crate alloc;
 
 // use crate::core::WireExpr;
-use alloc::{borrow::ToOwned, boxed::Box, string::String, sync::Arc};
+use alloc::{borrow::ToOwned, boxed::Box, string::String};
 use core::{
     convert::TryFrom,
     fmt,
     ops::{Deref, Div},
     str::FromStr,
 };
+
+use zenoh_buffers::Arc;
 
 use super::{canon::Canonize, keyexpr, nonwild_keyexpr};
 
