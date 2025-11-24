@@ -34,4 +34,5 @@ defmt = ["dep:defmt", "zenoh-collections/defmt"]
 [dependencies]
 defmt = { workspace = true, optional = true, features = ["alloc"] }
 rand = { workspace = true, optional = true }
+portable-atomic-util = { workspace = true, features = ["alloc"] }
 zenoh-collections = { workspace = true, default-features = false }

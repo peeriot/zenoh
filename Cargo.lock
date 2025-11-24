@@ -86,6 +86,7 @@ dependencies = [
  "cfg-if 1.0.1",
  "getrandom 0.3.3",
  "once_cell",
+ "portable-atomic",
  "serde",
  "version_check",
  "zerocopy",
@@ -1114,6 +1115,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "critical-section"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
+
+[[package]]
 name = "crossbeam"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1491,7 +1498,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2330,7 +2337,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.4",
+ "hashbrown 0.16.0",
  "serde",
  "serde_core",
 ]
@@ -3307,6 +3314,10 @@ name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+dependencies = [
+ "critical-section",
+ "portable-atomic",
+]
 
 [[package]]
 name = "once_cell_polyfill"
@@ -3717,6 +3728,21 @@ dependencies = [
  "cpuid-bool",
  "opaque-debug",
  "universal-hash",
+]
+
+[[package]]
+name = "portable-atomic"
+version = "1.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
+dependencies = [
+ "portable-atomic",
 ]
 
 [[package]]
@@ -4867,6 +4893,9 @@ name = "spin"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "spki"
@@ -5423,10 +5452,10 @@ dependencies = [
 [[package]]
 name = "token-cell"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9c7b0772e96c7fa6646b16c116753b3d1db503400209237230aa992c9e3a269"
+source = "git+https://github.com/ivmarkov/token-cell-rs#e4072472d40522efe5d55c09047284fe17e309ec"
 dependencies = [
  "paste",
+ "portable-atomic",
 ]
 
 [[package]]
@@ -6744,6 +6773,7 @@ name = "zenoh-buffers"
 version = "1.6.2"
 dependencies = [
  "defmt 0.3.100",
+ "portable-atomic-util",
  "rand 0.8.5",
  "zenoh-collections",
 ]
@@ -6754,6 +6784,7 @@ version = "1.6.2"
 dependencies = [
  "criterion",
  "rand 0.8.5",
+ "spin 0.10.0",
  "tracing",
  "uhlc",
  "zenoh-buffers",
@@ -6874,11 +6905,13 @@ dependencies = [
  "hashbrown 0.16.0",
  "keyed-set",
  "lazy_static",
+ "once_cell",
  "rand 0.8.5",
  "schemars 1.1.0",
  "serde",
  "test-case",
  "token-cell",
+ "zenoh-buffers",
  "zenoh-result",
 ]
 
@@ -7294,6 +7327,7 @@ dependencies = [
  "const_format",
  "defmt 0.3.100",
  "lazy_static",
+ "portable-atomic",
  "rand 0.8.5",
  "serde",
  "uhlc",

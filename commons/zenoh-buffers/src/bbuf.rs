@@ -13,7 +13,6 @@
 //
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
-use alloc::sync::Arc;
 use core::{fmt, num::NonZeroUsize, option};
 
 use crate::{
@@ -21,7 +20,7 @@ use crate::{
     reader::HasReader,
     vec,
     writer::{BacktrackableWriter, DidntWrite, HasWriter, Writer},
-    ZSlice,
+    zslice_buffer_arc, ZSlice,
 };
 
 #[derive(Clone, PartialEq, Eq)]
@@ -187,7 +186,7 @@ impl<'a> HasReader for &'a BBuf {
 impl From<BBuf> for ZSlice {
     fn from(value: BBuf) -> Self {
         // SAFETY: buffer length is ensured to be lesser than its capacity
-        unsafe { ZSlice::new(Arc::new(value.buffer), 0, value.len).unwrap_unchecked() }
+        unsafe { ZSlice::new(zslice_buffer_arc(value.buffer), 0, value.len).unwrap_unchecked() }
     }
 }
 
