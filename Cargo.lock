@@ -4151,11 +4151,13 @@ dependencies = [
 
 [[package]]
 name = "token-cell"
-version = "2.0.0"
-source = "git+https://github.com/ivmarkov/token-cell-rs#5f88f8d3cf5452f9dd7df5a68eb6611bc0142246"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb48920ae769b58126c8c93269805011c793201f95fde28b479b81a9a531bbde"
 dependencies = [
  "paste",
  "portable-atomic",
+ "rustversion",
 ]
 
 [[package]]
