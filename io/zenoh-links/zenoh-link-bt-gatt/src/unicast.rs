@@ -4,20 +4,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bluer::adv::{Advertisement, SecondaryChannel, Type};
+use bluer::adv::{Advertisement, Type};
 use bluer::gatt::local::{
     characteristic_control, Application, Characteristic, CharacteristicControlEvent,
     CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicWrite,
     CharacteristicWriteMethod, Service,
 };
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
-use bluer::{AdapterEvent, Address, AddressType, Device, DiscoveryFilter, DiscoveryTransport};
+use bluer::{AdapterEvent, Address, Device, DiscoveryFilter, DiscoveryTransport};
 use futures::{pin_mut, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 use zenoh_core::{zasyncread, zasyncwrite};
 use zenoh_link_commons::{
     ConstructibleLinkManagerUnicast, LinkAuthId, LinkManagerUnicastTrait, LinkUnicast,
@@ -27,6 +27,15 @@ use zenoh_protocol::core::{EndPoint, Locator};
 use zenoh_result::{zerror, ZResult};
 
 use crate::{BT_GATT_LOCATOR_PREFIX, BT_GATT_MAX_MTU};
+
+/// The Zenoh GATT Service UUID
+const SERVICE_UUID: Uuid = uuid!("24A9597F-1060-41BB-AB31-B638662BDCCC");
+
+/// The Zenoh GATT RX Characteristic UUID
+const RX_CHAR_UUID: Uuid = uuid!("7E54E1BC-82BF-4B0E-9B3A-3C187934BD89");
+
+/// The Zenoh GATT TX Characteristic UUID
+const TX_CHAR_UUID: Uuid = uuid!("F47EA3E5-4D04-4EEE-9ACA-E397C4408952");
 
 #[derive(Debug)]
 #[allow(dead_code)] // False positive
@@ -347,14 +356,6 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
             adapter.set_powered(true).await?;
         }
 
-        // Peeriot's BLE dongle lacks Public Addressing
-        // NOTE: The listener code won't work unless the Linux kernel is patched, fixing the bug
-        //       where static random addressed BLE controllers can't use extended advertising.
-        //       See: io/zenoh-links/zenoh-link-bt-gatt/extended-advertising-static-random-address.patch
-        if !matches!(adapter.address_type().await?, AddressType::LeRandom) {
-            panic!("Not a LeRandom address");
-        }
-
         // Close pre-existing active advertising instances for a clean slate
         if adapter.active_advertising_instances().await? > 0 {
             adapter.set_discoverable(false).await?;
@@ -362,39 +363,34 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
 
         tracing::info!("Adding new BLE listener: {}", &device_name);
 
-        // Enable extended advertising. This will make sure we have less conflict with other BLE
-        // devices that might be present, as it offloads the advertising to secondary channels which
-        // are always less congested.
         let le_advertisement = Advertisement {
             advertisement_type: Type::Peripheral,
-            service_uuids: vec![Uuid::from(bluer::id::Service::ComNordicsemiServiceUart)]
-                .into_iter()
-                .collect(),
+            service_uuids: vec![SERVICE_UUID].into_iter().collect(),
             discoverable: Some(true),
-            local_name: Some(device_name),
+            // Use something small or else it won't fit in the regular (non-extended) ad
+            local_name: Some("ZN".to_string()),
             // We don't care about speed of visibility, so set min-max intervals to be quite large
             // so that we have more radio time for actual existing connections.
             min_interval: Some(Duration::from_millis(1500)),
             max_interval: Some(Duration::from_millis(2000)),
-            // Choose the fastest PHY for the secondary channel
-            secondary_channel: Some(SecondaryChannel::TwoM),
+            // While it would be good to enable extended advertising (less conflicts with other BLE
+            // devices that might be present), it is not ideal as some BLE stacks might not support it
+            // and thus might not detect our presence.
+            // secondary_channel: Some(SecondaryChannel::TwoM),
             ..Default::default()
         };
         let _adv_handle = adapter.advertise(le_advertisement.clone()).await?;
 
-        // Create GATT control application which will expose the Nordic Uart Service to communicate
-        // with Peeriot.SwarmEmbedded devices
+        // Create GATT control application which will expose the Zenoh BLE Service for communication
         let (mut char_write_control, char_write_handle) = characteristic_control();
         let (mut char_notify_control, char_notify_handle) = characteristic_control();
         let app = Application {
             services: vec![Service {
-                uuid: Uuid::from(bluer::id::Service::ComNordicsemiServiceUart),
+                uuid: SERVICE_UUID,
                 primary: true,
                 characteristics: vec![
                     Characteristic {
-                        uuid: Uuid::from(
-                            bluer::id::Characteristic::ComNordicsemiCharacteristicUartRx,
-                        ),
+                        uuid: RX_CHAR_UUID,
                         write: Some(CharacteristicWrite {
                             write: true,
                             write_without_response: true,
@@ -405,11 +401,10 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
                         ..Default::default()
                     },
                     Characteristic {
-                        uuid: Uuid::from(
-                            bluer::id::Characteristic::ComNordicsemiCharacteristicUartTx,
-                        ),
+                        uuid: TX_CHAR_UUID,
                         notify: Some(CharacteristicNotify {
                             notify: true,
+                            indicate: true,
                             method: CharacteristicNotifyMethod::Io,
                             ..Default::default()
                         }),
@@ -629,20 +624,18 @@ async fn find_device(
     Err(e.into())
 }
 
-/// Tries to connect to the specified device making sure it contains the proper name and services
+/// Tries to connect to the specified device making sure it contains the proper services
 ///
 /// # Returns
 ///
 /// A [`CharacteristicWriter`] and [`CharacteristicReader`] which can be used to RX/TX data
 async fn try_connect(
     device: &Device,
-    device_name: String,
+    _device_name: String,
 ) -> Result<(CharacteristicWriter, CharacteristicReader), Error> {
-    // Find the correct named device
-    let name = device.alias().await?;
-    if name != device_name {
-        return Err(Error::UnrecognizedDevice);
-    }
+    // Matching by device name is deliberately not used,
+    // because regular advertisements might not contain a name, or the name might be
+    // short and not very meaningful.
 
     // Make sure we are connected
     let services = {
@@ -682,16 +675,20 @@ async fn try_connect(
     for service in services {
         let uuid = service.uuid().await?;
         tracing::trace!("Found service {}", uuid);
-        if uuid == Uuid::from(bluer::id::Service::ComNordicsemiServiceUart) {
+        if uuid == SERVICE_UUID {
             for char in service.characteristics().await? {
-                tracing::trace!("Found char {}", uuid);
                 let uuid = char.uuid().await?;
-                if uuid == Uuid::from(bluer::id::Characteristic::ComNordicsemiCharacteristicUartRx)
-                {
+                tracing::trace!("Found char {}", uuid);
+                if uuid == RX_CHAR_UUID {
+                    // TODO: Can't use write_io because we actually want _confirmed_ writes,
+                    // so that we can apply backpressure on the other peer if we are receiving data too fast
+                    // Address this in future
                     writer = Some(char.write_io().await?);
-                } else if uuid
-                    == Uuid::from(bluer::id::Characteristic::ComNordicsemiCharacteristicUartTx)
-                {
+                } else if uuid == TX_CHAR_UUID {
+                    // TODO: Can't use notify_io because we want _confirmed_ notifications (indications)
+                    // so that the other peer can apply backpressure on us if we are sending
+                    // data too fast
+                    // Address this in future
                     reader = Some(char.notify_io().await?);
                 }
             }
