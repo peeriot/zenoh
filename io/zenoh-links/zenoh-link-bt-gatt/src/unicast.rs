@@ -391,6 +391,10 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
                         write: Some(CharacteristicWrite {
                             write: true,
                             write_without_response: true,
+                            // TODO:
+                            // Try `CharacteristicWriteMethod::Fun` to see
+                            // if this work-arounds the bug where BlueZ disconnects
+                            // with ATT disconnect code 0x13 after ~ 8 seconds
                             method: CharacteristicWriteMethod::Io,
                             ..Default::default()
                         }),
@@ -639,6 +643,9 @@ async fn try_connect(
 
     // Make sure we are connected
     let services = {
+        // TODO:
+        // Figure out why so many connection retries are necessary
+        // i.e. why the connection attempt fails most often than not
         let mut retries = 10;
 
         loop {
