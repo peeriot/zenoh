@@ -83,6 +83,7 @@ pub mod flag {
 /// +---------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct OpenSyn {
     pub lease: Duration,
     pub initial_sn: TransportSn,
@@ -189,6 +190,7 @@ impl OpenSyn {
 /// +---------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct OpenAck {
     pub lease: Duration,
     pub initial_sn: TransportSn,

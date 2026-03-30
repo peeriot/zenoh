@@ -37,10 +37,12 @@ std = [
   "zenoh-result/std",
 ]
 test = ["rand", "zenoh-buffers/test"]
+defmt = ["dep:defmt", "zenoh-buffers/defmt", "uhlc/defmt"]
 unstable = []
 
 [dependencies]
 const_format = { workspace = true }
+defmt = { workspace = true, optional = true }
 rand = { workspace = true, features = ["alloc", "getrandom"], optional = true }
 serde = { workspace = true, features = ["alloc"] }
 uhlc = { workspace = true, default-features = false }

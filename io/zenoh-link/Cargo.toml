@@ -25,6 +25,7 @@ version = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+transport_bt_gatt = ["zenoh-link-bt-gatt"]
 transport_quic = ["zenoh-link-quic"]
 transport_quic_datagram = ["zenoh-link-quic_datagram"]
 transport_serial = ["zenoh-link-serial"]
@@ -45,6 +46,7 @@ zenoh-link-commons = { workspace = true }
 zenoh-link-quic = { workspace = true, optional = true }
 zenoh-link-quic_datagram = { workspace = true, optional = true }
 zenoh-link-serial = { workspace = true, optional = true }
+zenoh-link-bt-gatt = { workspace = true, optional = true }
 zenoh-link-tcp = { workspace = true, optional = true }
 zenoh-link-tls = { workspace = true, optional = true }
 zenoh-link-udp = { workspace = true, optional = true }
