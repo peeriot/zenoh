@@ -106,6 +106,7 @@ impl Writer for &mut [u8] {
     }
 }
 
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SliceMark<'s> {
     ptr: *const u8,
     len: usize,

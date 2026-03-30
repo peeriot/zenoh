@@ -21,6 +21,7 @@ use crate::{network::RequestId, transport::TransportSn};
 #[repr(u8)]
 // The value represents the 2-bit encoded value
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Bits {
     U8 = 0b00,
     U16 = 0b01,
@@ -115,6 +116,7 @@ impl fmt::Display for Bits {
 #[repr(u8)]
 // The value indicates the bit offset
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Field {
     FrameSN = 0,
     RequestID = 2,
@@ -122,6 +124,7 @@ pub enum Field {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Resolution(u8);
 
 impl Resolution {
@@ -174,6 +177,7 @@ impl serde::Serialize for Bits {
     }
 }
 
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct BitsVisitor;
 impl<'de> serde::de::Visitor<'de> for BitsVisitor {
     type Value = Bits;

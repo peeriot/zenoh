@@ -54,6 +54,7 @@ pub mod flag {
 ///     This implementation limits the resolution to 32bit.
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Request {
     pub id: RequestId,
     pub wire_expr: WireExpr<'static>,
@@ -93,6 +94,7 @@ pub mod ext {
     // The `zenoh::queryable::Queryable`s that should be target of a `zenoh::Session::get()`.
     #[repr(u8)]
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub enum QueryTarget {
         /// Let Zenoh find the BestMatching queryable capabale of serving the query.
         #[default]

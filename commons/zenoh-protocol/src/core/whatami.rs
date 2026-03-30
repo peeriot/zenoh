@@ -37,6 +37,7 @@ use zenoh_result::{bail, ZError};
 /// A more detailed explanation of each mode is at [Zenoh Documentation](https://zenoh.io/docs/getting-started/deployment/)
 #[repr(u8)]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WhatAmI {
     Router = 0b001,
     #[default]
@@ -135,6 +136,7 @@ impl From<WhatAmI> for u8 {
 /// with the `|` operator
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct WhatAmIMatcher(NonZeroU8);
 
 impl WhatAmIMatcher {
@@ -315,6 +317,7 @@ impl serde::Serialize for WhatAmI {
     }
 }
 
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct WhatAmIVisitor;
 
 impl<'de> serde::de::Visitor<'de> for WhatAmIVisitor {
@@ -376,6 +379,7 @@ impl serde::Serialize for WhatAmIMatcher {
     }
 }
 
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct WhatAmIMatcherVisitor;
 impl<'de> serde::de::Visitor<'de> for WhatAmIMatcherVisitor {
     type Value = WhatAmIMatcher;

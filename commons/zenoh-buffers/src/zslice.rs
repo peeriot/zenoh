@@ -82,6 +82,7 @@ impl<const N: usize> ZSliceBuffer for [u8; N] {
 /*************************************/
 #[cfg(feature = "shared-memory")]
 #[derive(Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum ZSliceKind {
     Raw = 0,
@@ -96,6 +97,18 @@ pub struct ZSlice {
     end: usize,
     #[cfg(feature = "shared-memory")]
     pub kind: ZSliceKind,
+}
+
+// Need to manually implement as defmt autoderive doesn't like dyn objects
+#[cfg(feature = "defmt")]
+impl defmt::Format for ZSlice {
+    fn format(&self, fmt: defmt::Formatter) {
+        self.buf.as_slice().format(fmt);
+        self.start.format(fmt);
+        self.end.format(fmt);
+        #[cfg(feature = "shared-memory")]
+        self.kind.format(fmt);
+    }
 }
 
 impl ZSlice {
