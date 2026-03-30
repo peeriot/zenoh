@@ -878,7 +878,7 @@ impl Session {
     }
 
     #[zenoh_macros::internal]
-    pub fn hlc(&self) -> Option<&HLC> {
+    pub fn hlc(&self) -> Option<Arc<HLC>> {
         self.0.runtime.hlc()
     }
 
