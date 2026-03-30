@@ -196,7 +196,7 @@ pub(crate) struct RuntimeState {
 
 #[allow(private_interfaces)]
 pub trait IRuntime: Send + Sync {
-    fn hlc(&self) -> Option<&HLC>;
+    fn hlc(&self) -> Option<Arc<HLC>>;
     fn zid(&self) -> ZenohId;
     fn whatami(&self) -> WhatAmI;
     fn next_id(&self) -> u32;
@@ -305,8 +305,8 @@ impl IRuntime for RuntimeState {
         self.locators_noloopback.read().unwrap().clone()
     }
 
-    fn hlc(&self) -> Option<&HLC> {
-        self.hlc.as_ref().map(Arc::as_ref)
+    fn hlc(&self) -> Option<Arc<HLC>> {
+        self.hlc.as_ref().map(Arc::clone)
     }
 
     fn zid(&self) -> ZenohId {
@@ -991,7 +991,7 @@ impl Runtime {
     }
 
     #[allow(dead_code)]
-    pub fn hlc(&self) -> Option<&HLC> {
+    pub fn hlc(&self) -> Option<Arc<HLC>> {
         self.state.hlc()
     }
 
