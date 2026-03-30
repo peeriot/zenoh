@@ -25,6 +25,7 @@ use crate::{
 };
 
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct BBuf {
     buffer: Box<[u8]>,
     len: usize,

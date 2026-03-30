@@ -20,6 +20,7 @@ pub const MAX_STACK_SIZE: usize = 255;
 /// The `const ID: u8` parameter encodes the extension's wire ID, ensuring
 /// type-safety across different message contexts.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TsStackType<const ID: u8> {
     pub ts_stack: TimestampStack,
 }
@@ -88,6 +89,7 @@ pub mod interception_point {
 /// +---------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Interception {
     /// Bitfield: interception point id + timestamp format.
     pub flags: u8,
@@ -113,6 +115,7 @@ pub struct Interception {
 /// +---------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TimestampStack {
     /// Bitmask of which interception points are activated.
     pub conf_flags: u8,

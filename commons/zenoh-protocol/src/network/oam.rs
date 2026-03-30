@@ -51,6 +51,7 @@ pub mod id {
 /// - 0b11: Reserved
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Oam {
     pub id: OamId,
     pub body: ZExtBody,

@@ -21,6 +21,7 @@ enum CowStrInner<'a> {
     Borrowed(&'a str),
     Owned { s: Box<str>, capacity: NonZeroUsize },
 }
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CowStr<'a>(CowStrInner<'a>);
 impl<'a> CowStr<'a> {
     pub(crate) const fn borrowed(s: &'a str) -> Self {

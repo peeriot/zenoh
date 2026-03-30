@@ -92,6 +92,7 @@ use crate::{
 /// (^) The next sequence number MUST be compatible with the adverstised Sequence Number resolution
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Join {
     pub version: u8,
     pub whatami: WhatAmI,

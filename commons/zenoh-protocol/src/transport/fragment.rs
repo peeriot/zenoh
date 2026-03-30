@@ -69,6 +69,7 @@ pub mod flag {
 ///       In any case, the length of a message must not exceed 65535 bytes.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Fragment {
     pub reliability: Reliability,
     pub more: bool,
@@ -124,6 +125,7 @@ impl Fragment {
 
 // FragmentHeader
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct FragmentHeader {
     pub reliability: Reliability,
     pub more: bool,

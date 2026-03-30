@@ -57,6 +57,7 @@ pub const EMPTY_EXPR_ID: ExprId = 0;
 // +---------------+
 //
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct WireExpr<'a> {
     pub scope: ExprId, // 0 marks global scope
     pub suffix: Cow<'a, str>,

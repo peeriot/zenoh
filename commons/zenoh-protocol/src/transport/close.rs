@@ -83,6 +83,7 @@ pub fn reason_to_str(reason: u8) -> &'static str {
 ///       In any case, the length of a message must not exceed 65535 bytes.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Close {
     pub reason: u8,
     pub session: bool,

@@ -172,6 +172,7 @@ pub enum LinkAuthId {
     UnixsockStream,
     Vsock,
     Ws,
+    Ble,
 }
 
 impl LinkAuthId {
@@ -186,6 +187,7 @@ impl LinkAuthId {
             LinkAuthId::UnixsockStream => None,
             LinkAuthId::Vsock => None,
             LinkAuthId::Ws => None,
+            LinkAuthId::Ble => None,
         }
     }
 }
