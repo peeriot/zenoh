@@ -1,0 +1,35 @@
+Subject: [PATCH] Fix use of extended advertising with static random addressed BLE controllers
+
+This fixes the bug where when requesting the use of extended advertising forces a static random addressed BLE controller to use a non-existent public address instead of the existing random address. This would otherwise cause the operation to fail.
+This patch is to be applied on top of rpi-6.12.y of https://github.com/raspberrypi/linux
+---
+Index: net/bluetooth/hci_sync.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/net/bluetooth/hci_sync.c b/net/bluetooth/hci_sync.c
+--- a/net/bluetooth/hci_sync.c	(revision 317477113b20b2aebbe39f0132a431dc5e38c2f1)
++++ b/net/bluetooth/hci_sync.c	(date 1751454344966)
+@@ -6732,8 +6732,19 @@
+ 		return 0;
+ 	}
+ 
+-	/* No privacy so use a public address. */
+-	*own_addr_type = ADDR_LE_DEV_PUBLIC;
++	/* No privacy
++	 *
++     * Even though no privacy is requested, we have to use the assigned random static address if we don't have a public
++	 * address.
++	 */
++	if (bacmp(&hdev->bdaddr, BDADDR_ANY) == 0 && bacmp(&hdev->static_addr, BDADDR_ANY) != 0) {
++		/* Re-use the static address if one is set */
++		bacpy(rand_addr, &hdev->static_addr);
++		*own_addr_type = ADDR_LE_DEV_RANDOM;
++	} else {
++		/* Use a public address. */
++		*own_addr_type = ADDR_LE_DEV_PUBLIC;
++	}
+ 
+ 	return 0;
+ }

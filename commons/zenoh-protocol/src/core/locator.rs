@@ -24,6 +24,7 @@ use super::endpoint::*;
 #[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(into = "String")]
 #[serde(try_from = "String")]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Locator(pub(super) EndPoint);
 
 impl Locator {

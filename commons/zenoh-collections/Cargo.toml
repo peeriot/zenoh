@@ -32,6 +32,8 @@ version = { workspace = true }
 default = ["std"]
 std = ["ahash/default"]
 test = []
+defmt = ["dep:defmt"]
 
 [dependencies]
 ahash = { workspace = true }
+defmt = { workspace = true, optional = true, features = ["alloc"] }

@@ -59,6 +59,7 @@ pub(super) fn config(s: &str) -> &str {
 // Protocol
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Protocol<'a>(pub(super) &'a str);
 
 impl<'a> Protocol<'a> {
@@ -87,6 +88,7 @@ impl fmt::Debug for Protocol<'_> {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ProtocolMut<'a>(&'a mut EndPoint);
 
 impl<'a> ProtocolMut<'a> {
@@ -123,6 +125,7 @@ impl fmt::Debug for ProtocolMut<'_> {
 // Address
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Address<'a>(pub(super) &'a str);
 
 impl<'a> Address<'a> {
@@ -157,6 +160,7 @@ impl<'a> From<&'a str> for Address<'a> {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct AddressMut<'a>(&'a mut EndPoint);
 
 impl<'a> AddressMut<'a> {
@@ -193,6 +197,7 @@ impl fmt::Debug for AddressMut<'_> {
 // Metadata
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Metadata<'a>(pub(super) &'a str);
 
 impl<'a> Metadata<'a> {
@@ -242,6 +247,7 @@ impl fmt::Debug for Metadata<'_> {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MetadataMut<'a>(&'a mut EndPoint);
 
 impl<'a> MetadataMut<'a> {
@@ -328,6 +334,7 @@ impl fmt::Debug for MetadataMut<'_> {
 // Config
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Config<'a>(pub(super) &'a str);
 
 impl<'a> Config<'a> {
@@ -372,6 +379,7 @@ impl fmt::Debug for Config<'_> {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ConfigMut<'a>(&'a mut EndPoint);
 
 impl<'a> ConfigMut<'a> {
@@ -484,6 +492,7 @@ impl fmt::Debug for ConfigMut<'_> {
 #[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(into = "String")]
 #[serde(try_from = "String")]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct EndPoint {
     pub(super) inner: String,
 }

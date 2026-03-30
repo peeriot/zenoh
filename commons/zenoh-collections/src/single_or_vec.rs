@@ -23,6 +23,7 @@ use core::{
 };
 
 #[derive(Clone, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 enum SingleOrVecInner<T> {
     Single(T),
     Vec(Vec<T>),
@@ -90,6 +91,7 @@ where
 }
 
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SingleOrVec<T>(SingleOrVecInner<T>);
 
 impl<T> SingleOrVec<T> {
@@ -194,6 +196,7 @@ enum DrainInner<'a, T> {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Drain<'a, T> {
     inner: DrainInner<'a, T>,
 }
@@ -281,6 +284,7 @@ impl<T> iter::Extend<T> for SingleOrVec<T> {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct IntoIter<T> {
     pub drain: alloc::vec::IntoIter<T>,
     pub last: Option<T>,

@@ -106,10 +106,12 @@ pub mod iext {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DidntConvert;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZExtUnit<const ID: u8>;
 
 impl<const ID: u8> Default for ZExtUnit<{ ID }> {
@@ -168,6 +170,7 @@ impl<const ID: u8> TryFrom<ZExtUnknown> for ZExtUnit<{ ID }> {
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZExtZ64<const ID: u8> {
     pub value: u64,
 }
@@ -226,6 +229,7 @@ impl<const ID: u8> TryFrom<ZExtUnknown> for ZExtZ64<{ ID }> {
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZExtZBuf<const ID: u8> {
     pub value: ZBuf,
 }
@@ -283,6 +287,7 @@ impl<const ID: u8> TryFrom<ZExtUnknown> for ZExtZBuf<{ ID }> {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZExtZBufHeader<const ID: u8> {
     pub len: usize,
 }
@@ -312,6 +317,7 @@ impl<const ID: u8> Debug for ZExtZBufHeader<{ ID }> {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ZExtBody {
     #[default]
     Unit,
@@ -337,6 +343,7 @@ impl ZExtBody {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ZExtUnknown {
     pub id: u8,
     pub body: ZExtBody,

@@ -14,6 +14,7 @@
 use std::collections::VecDeque;
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct RingBuffer<T> {
     capacity: usize,
     len: usize,

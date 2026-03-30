@@ -43,6 +43,7 @@ pub mod flag {
 /// +---------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Push {
     pub wire_expr: WireExpr<'static>,
     pub ext_qos: ext::QoSType,

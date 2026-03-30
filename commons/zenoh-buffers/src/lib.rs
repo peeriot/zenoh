@@ -127,6 +127,7 @@ pub mod writer {
     use crate::ZSlice;
 
     #[derive(Debug, Clone, Copy)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DidntWrite;
 
     pub trait Writer {
@@ -219,6 +220,7 @@ pub mod reader {
     use crate::{ZBuf, ZSlice};
 
     #[derive(Debug, Clone, Copy)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DidntRead;
 
     impl Display for DidntRead {
@@ -335,6 +337,7 @@ pub mod reader {
     }
 
     #[derive(Debug, Clone, Copy)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct DidntSiphon;
 
     pub trait SiphonableReader: Reader {

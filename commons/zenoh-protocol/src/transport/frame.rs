@@ -68,6 +68,7 @@ pub mod flag {
 ///       In any case, the length of a message must not exceed 65535 bytes.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Frame {
     pub reliability: Reliability,
     pub sn: TransportSn,
@@ -112,6 +113,7 @@ impl Frame {
 
 // FrameHeader
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct FrameHeader {
     pub reliability: Reliability,
     pub sn: TransportSn,
