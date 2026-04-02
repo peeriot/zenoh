@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,10 +10,9 @@ use bluer::gatt::local::{
     CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicWrite,
     CharacteristicWriteMethod, Service,
 };
-use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
+use bluer::gatt::{CharacteristicReader, CharacteristicWriter, WriteOp};
 use bluer::{AdapterEvent, Address, Device, DiscoveryFilter, DiscoveryTransport};
 use futures::{pin_mut, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -24,9 +23,14 @@ use zenoh_link_commons::{
     LinkUnicastTrait, NewLinkChannelSender,
 };
 use zenoh_protocol::core::{EndPoint, Locator};
-use zenoh_result::{zerror, ZResult};
+use zenoh_result::{zerror, ZError, ZResult};
 
-use crate::{BT_GATT_LOCATOR_PREFIX, BT_GATT_MAX_MTU};
+use crate::unicast::io::{
+    GattCharRead, GattCharWrite, RemoteCharacteristicReader, RemoteCharacteristicWriter,
+};
+use crate::BT_GATT_LOCATOR_PREFIX;
+
+mod io;
 
 /// The Zenoh GATT Service UUID
 const SERVICE_UUID: Uuid = uuid!("24A9597F-1060-41BB-AB31-B638662BDCCC");
@@ -58,33 +62,38 @@ impl From<std::io::Error> for Error {
     }
 }
 
-struct LinkUnicastBtGatt {
+struct LinkUnicastBtGatt<R, W> {
     /// Handle to the Bluetooth device
     device_handle: Arc<Mutex<Option<Device>>>,
     /// Handler to the Characteristic Writer used for writing bytes
-    char_writer: Arc<Mutex<Option<CharacteristicWriter>>>,
+    char_writer: Arc<Mutex<Option<W>>>,
     /// Handler to the Characteristic Reader used for reading bytes
-    char_reader: Arc<Mutex<Option<CharacteristicReader>>>,
+    char_reader: Arc<Mutex<Option<R>>>,
     // The BT advertised name to use as locator
     src_locator: Locator,
     // The serial destination path (random UUIDv4)
     dst_locator: Locator,
     /// The interface used for this link
     interface: String,
+    /// The negotiated MTU
+    mtu: usize,
 }
 
-unsafe impl Send for LinkUnicastBtGatt {}
-unsafe impl Sync for LinkUnicastBtGatt {}
-
-impl LinkUnicastBtGatt {
+impl<R, W> LinkUnicastBtGatt<R, W>
+where
+    R: GattCharRead,
+    W: GattCharWrite,
+{
     fn new(
         device_handle: Option<Device>,
-        char_reader: CharacteristicReader,
-        char_writer: CharacteristicWriter,
+        char_reader: R,
+        char_writer: W,
         src_path: &str,
         dst_path: &str,
         interface: String,
     ) -> Self {
+        let mtu = char_reader.mtu().min(char_writer.mtu());
+
         Self {
             device_handle: Arc::new(Mutex::new(device_handle)),
             char_reader: Arc::new(Mutex::new(Some(char_reader))),
@@ -92,29 +101,59 @@ impl LinkUnicastBtGatt {
             src_locator: Locator::new(BT_GATT_LOCATOR_PREFIX, src_path, "").unwrap(),
             dst_locator: Locator::new(BT_GATT_LOCATOR_PREFIX, dst_path, "").unwrap(),
             interface,
+            mtu,
         }
+    }
+
+    async fn read<T: GattCharRead>(mut read: T, buf: &mut [u8]) -> ZResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        read.read(buf).await.map_err(|e| {
+            let e = zerror!("Unable to read from GATT characteristic: {}", e);
+            tracing::error!("{}", e);
+
+            e.into()
+        })
+    }
+
+    async fn write<T: GattCharWrite>(mut write: T, data: &[u8], mtu: usize) -> ZResult<usize> {
+        let data = &data[..data.len().min(mtu)];
+
+        write.write(data).await.map(|_| data.len()).map_err(|e| {
+            let e = zerror!("Unable to write to GATT characteristic: {}", e);
+            tracing::error!("{}", e);
+
+            e.into()
+        })
+    }
+
+    fn read_err(link: impl Display) -> ZError {
+        let e = zerror!(
+            "Unable to read from BT GATT link {}: Peripheral not connected",
+            link
+        );
+        tracing::error!("{}", e);
+
+        e
+    }
+
+    fn write_err(link: impl Display) -> ZError {
+        let e = zerror!(
+            "Unable to read from BT GATT link {}: Peripheral not connected",
+            link
+        );
+        tracing::error!("{}", e);
+
+        e
     }
 }
 
 #[async_trait]
-impl LinkUnicastTrait for LinkUnicastBtGatt {
+impl<R: GattCharRead, W: GattCharWrite> LinkUnicastTrait for LinkUnicastBtGatt<R, W> {
     fn get_mtu(&self) -> u16 {
-        let r_mtu = self
-            .char_reader
-            .try_lock()
-            .ok()
-            .and_then(|r| r.as_ref().map(|r| r.mtu()));
-        let w_mtu = self
-            .char_writer
-            .try_lock()
-            .ok()
-            .and_then(|w| w.as_ref().map(|w| w.mtu()));
-
-        // If we can't lock and find the true MTU, it's not a big deal
-        r_mtu
-            .zip(w_mtu)
-            .map(|(r_mtu, w_mtu)| r_mtu.min(w_mtu) as u16)
-            .unwrap_or(BT_GATT_MAX_MTU)
+        self.mtu as _
     }
 
     #[inline(always)]
@@ -149,94 +188,52 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
 
     async fn write(&self, buffer: &[u8]) -> ZResult<usize> {
         match self.char_writer.lock().await.as_mut() {
-            Some(writer) => writer.write(buffer).await.map_err(|e| {
-                let e = zerror!("Unable to write on BT GATT link {}: {}", self, e);
-                tracing::error!("{}", e);
-
-                e.into()
-            }),
-            None => {
-                let e = zerror!("Unable to write on BT GATT link {}: Port not open", self);
-                tracing::error!("{}", e);
-
-                Err(e.into())
-            }
+            Some(writer) => Self::write(writer, buffer, self.mtu).await,
+            None => Err(Self::write_err(self).into()),
         }
     }
 
     async fn write_all(&self, buffer: &[u8]) -> ZResult<()> {
         match self.char_writer.lock().await.as_mut() {
-            Some(writer) => writer.write_all(buffer).await.map_err(|e| {
-                let e = zerror!("Unable to write on BT GATT link {}: {}", self, e);
-                tracing::error!("{}", e);
+            Some(writer) => {
+                let mut written = 0;
+                while written < buffer.len() {
+                    written += Self::write(&mut *writer, &buffer[written..], self.mtu).await?;
+                }
 
-                e.into()
-            }),
-            None => {
-                let e = zerror!(
-                    "Unable to write on BT GATT link {}: Peripheral not connected",
-                    self
-                );
-                tracing::error!("{}", e);
-
-                Err(e.into())
+                Ok(())
             }
+            None => Err(Self::write_err(self).into()),
         }
     }
 
     async fn read(&self, buffer: &mut [u8]) -> ZResult<usize> {
         match self.char_reader.lock().await.as_mut() {
             Some(reader) => {
-                let res = reader.read(buffer).await.map_err(|e| {
-                    let e = zerror!("Unable to read from BT GATT link {}: {}", self, e);
-                    tracing::error!("{}", e);
+                let len = Self::read(reader, buffer).await?;
 
-                    tracing::trace!("Read END");
-                    e.into()
-                });
-
-                match res {
-                    Ok(0) if buffer.len() != 0 => {
-                        return Err(zerror!("End Of Life for {}", self.src_locator).into());
-                    }
-                    _ => (),
+                if len == 0 && !buffer.is_empty() {
+                    Err(zerror!("End Of Life for {}", self.src_locator).into())
+                } else {
+                    Ok(len)
                 }
-
-                res
             }
-            None => {
-                let e = zerror!(
-                    "Unable to read from BT GATT link {}: Peripheral not connected",
-                    self
-                );
-                tracing::error!("{}", e);
-
-                Err(e.into())
-            }
+            None => Err(Self::read_err(self).into()),
         }
     }
 
     async fn read_exact(&self, buffer: &mut [u8]) -> ZResult<()> {
         match self.char_reader.lock().await.as_mut() {
             Some(reader) => {
-                let res = reader.read_exact(buffer).await.map(|_| ()).map_err(|e| {
-                    let e = zerror!("Unable to read from BT GATT link {}: {}", self, e);
-                    tracing::error!("{}", e);
+                let mut read = 0;
+                while read < buffer.len() {
+                    let n = Self::read(&mut *reader, &mut buffer[read..]).await?;
+                    read += n;
+                }
 
-                    e.into()
-                });
-
-                res
+                Ok(())
             }
-            None => {
-                let e = zerror!(
-                    "Unable to read from BT GATT link {}: Peripheral not connected",
-                    self
-                );
-                tracing::error!("{}", e);
-
-                Err(e.into())
-            }
+            None => Err(Self::read_err(self).into()),
         }
     }
 
@@ -260,14 +257,14 @@ impl LinkUnicastTrait for LinkUnicastBtGatt {
     }
 }
 
-impl fmt::Display for LinkUnicastBtGatt {
+impl<R, W> fmt::Display for LinkUnicastBtGatt<R, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} => {}", self.src_locator, self.dst_locator)?;
         Ok(())
     }
 }
 
-impl fmt::Debug for LinkUnicastBtGatt {
+impl<R, W> fmt::Debug for LinkUnicastBtGatt<R, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BT GATT")
             .field("src", &self.src_locator)
@@ -394,6 +391,10 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
                         write: Some(CharacteristicWrite {
                             write: true,
                             write_without_response: true,
+                            // TODO:
+                            // Try `CharacteristicWriteMethod::Fun` to see
+                            // if this work-arounds the bug where BlueZ disconnects
+                            // with ATT disconnect code 0x13 after ~ 8 seconds
                             method: CharacteristicWriteMethod::Io,
                             ..Default::default()
                         }),
@@ -489,8 +490,8 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
                     let mut need_readvertise = false;
                     for address in rx_addresses.intersection(&tx_addresses) {
                         need_readvertise = true;
-                        let rx = characteristics_rx_mapping.remove(&address).unwrap();
-                        let tx = characteristics_tx_mapping.remove(&address).unwrap();
+                        let rx = characteristics_rx_mapping.remove(address).unwrap();
+                        let tx = characteristics_tx_mapping.remove(address).unwrap();
                         let central = address.to_string();
                         tracing::info!("Accepted connection from central {}", &central);
 
@@ -571,7 +572,7 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
 async fn find_device(
     device_name: String,
     adapter_choice: Option<String>,
-) -> ZResult<LinkUnicastBtGatt> {
+) -> ZResult<LinkUnicastBtGatt<impl GattCharRead, impl GattCharWrite>> {
     let session = bluer::Session::new().await?;
     let adapter = if let Some(adapter) = adapter_choice {
         session.adapter(&adapter)?
@@ -582,10 +583,13 @@ async fn find_device(
     // Make sure adapter is powered
     adapter.set_powered(true).await?;
     // Quicker and more efficient discovery by just looking for BLE devices
-    let mut discovery_filter = DiscoveryFilter::default();
-    discovery_filter.transport = DiscoveryTransport::Le;
-    discovery_filter.pattern = Some(device_name.clone());
-    adapter.set_discovery_filter(discovery_filter).await?;
+    adapter
+        .set_discovery_filter(DiscoveryFilter {
+            transport: DiscoveryTransport::Le,
+            pattern: Some(device_name.clone()),
+            ..Default::default()
+        })
+        .await?;
 
     let discover = adapter.discover_devices().await?;
     pin_mut!(discover);
@@ -600,11 +604,11 @@ async fn find_device(
             })?;
 
             match try_connect(&device, device_name.clone()).await {
-                Ok((write_io, notify_io)) => {
+                Ok((char_writer, char_reader)) => {
                     return Ok(LinkUnicastBtGatt::new(
                         Some(device),
-                        notify_io,
-                        write_io,
+                        char_reader,
+                        char_writer,
                         &src,
                         &device_name,
                         adapter.name().to_owned(),
@@ -628,40 +632,48 @@ async fn find_device(
 ///
 /// # Returns
 ///
-/// A [`CharacteristicWriter`] and [`CharacteristicReader`] which can be used to RX/TX data
+/// Types implementing [`GattCharWrite`] and [`GattCharRead`] which can be used to RX/TX data
 async fn try_connect(
     device: &Device,
     _device_name: String,
-) -> Result<(CharacteristicWriter, CharacteristicReader), Error> {
+) -> Result<(impl GattCharWrite, impl GattCharRead), Error> {
     // Matching by device name is deliberately not used,
     // because regular advertisements might not contain a name, or the name might be
     // short and not very meaningful.
 
     // Make sure we are connected
     let services = {
+        // TODO:
+        // Figure out why so many connection retries are necessary
+        // i.e. why the connection attempt fails most often than not
         let mut retries = 10;
+
         loop {
             match device.is_connected().await {
-                Ok(true) => {
-                    if let Ok(services) = device.services().await {
-                        break services;
-                    } else {
-                        tracing::warn!("Retry service resolution");
+                Ok(true) => match device.services().await {
+                    Ok(services) => break services,
+                    Err(e) => {
+                        tracing::warn!("Service resolution error: {}, retrying...", e);
 
                         retries -= 1;
                         let _ = device.disconnect().await;
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
-                }
-                Ok(false) if retries > 0 => {
-                    if device.connect().await.is_err() {
-                        tracing::warn!("Retry connection");
-                        retries -= 1;
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                },
+                Ok(false) => {
+                    if retries > 0 {
+                        if let Err(e) = device.connect().await {
+                            tracing::warn!("Connection error: {}, retrying...", e);
+                            retries -= 1;
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    } else {
+                        tracing::error!("Connection retries expired");
+                        return Err(Error::FailedToConnect);
                     }
                 }
-                _ => {
-                    tracing::error!("Can't connect");
+                Err(e) => {
+                    tracing::error!("Connectivity state error: {}", e);
                     return Err(Error::FailedToConnect);
                 }
             }
@@ -680,16 +692,16 @@ async fn try_connect(
                 let uuid = char.uuid().await?;
                 tracing::trace!("Found char {}", uuid);
                 if uuid == RX_CHAR_UUID {
-                    // TODO: Can't use write_io because we actually want _confirmed_ writes,
+                    // Cannot use `write_io` because we actually want _confirmed_ writes,
                     // so that we can apply backpressure on the other peer if we are receiving data too fast
-                    // Address this in future
-                    writer = Some(char.write_io().await?);
+                    // writer = Some(char.write_io().await?);
+                    writer = Some(RemoteCharacteristicWriter::new(char, WriteOp::Request).await?);
                 } else if uuid == TX_CHAR_UUID {
-                    // TODO: Can't use notify_io because we want _confirmed_ notifications (indications)
+                    // Cannot use `notify_io` because we want _confirmed_ notifications (indications)
                     // so that the other peer can apply backpressure on us if we are sending
                     // data too fast
-                    // Address this in future
-                    reader = Some(char.notify_io().await?);
+                    // reader = Some(char.notify_io().await?);
+                    reader = Some(RemoteCharacteristicReader::new(char).await?);
                 }
             }
         }
