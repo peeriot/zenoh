@@ -14,10 +14,6 @@ use zenoh_result::ZResult;
 
 pub use unicast::*;
 
-// Maximum MTU (ATT MTU) in bytes. We are restricting here to BLE 5+ and single L2CAP packet, which
-// means 247 - 3
-const BT_GATT_MAX_MTU: u16 = 244;
-
 const DEFAULT_EXCLUSIVE: bool = true;
 
 pub const BT_GATT_LOCATOR_PREFIX: &str = "bt_gatt";
