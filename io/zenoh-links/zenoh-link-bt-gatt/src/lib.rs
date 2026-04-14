@@ -3,6 +3,10 @@
 //! This crate is intended for Zenoh's internal use.
 //!
 //! [Click here for Zenoh's documentation](../zenoh/index.html)
+
+// bluer is Linux-only (BlueZ / D-Bus). Gate the entire crate accordingly.
+#![cfg(target_os = "linux")]
+
 mod unicast;
 
 use std::str::FromStr;

@@ -6530,6 +6530,7 @@ version = "1.8.0"
 dependencies = [
  "zenoh-config",
  "zenoh-link-bt-gatt",
+ "zenoh-link-bt-l2cap-tls",
  "zenoh-link-commons",
  "zenoh-link-quic",
  "zenoh-link-quic_datagram",
@@ -6562,6 +6563,30 @@ dependencies = [
  "zenoh-result",
  "zenoh-runtime",
  "zenoh-sync",
+]
+
+[[package]]
+name = "zenoh-link-bt-l2cap-tls"
+version = "1.8.0"
+dependencies = [
+ "async-trait",
+ "bluer",
+ "futures",
+ "rustls",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "x509-parser",
+ "zenoh-config",
+ "zenoh-core",
+ "zenoh-link-commons",
+ "zenoh-protocol",
+ "zenoh-result",
+ "zenoh-runtime",
 ]
 
 [[package]]

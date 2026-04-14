@@ -36,6 +36,7 @@ members = [
   "io/zenoh-links/zenoh-link-quic/",
   "io/zenoh-links/zenoh-link-quic_datagram/",
   "io/zenoh-links/zenoh-link-bt-gatt/",
+  "io/zenoh-links/zenoh-link-bt-l2cap-tls/",
   "io/zenoh-links/zenoh-link-serial",
   "io/zenoh-links/zenoh-link-tcp/",
   "io/zenoh-links/zenoh-link-tls/",
@@ -239,6 +240,7 @@ zenoh-link-udp = { version = "=1.8.0", path = "io/zenoh-links/zenoh-link-udp" }
 zenoh-link-unixpipe = { version = "=1.8.0", path = "io/zenoh-links/zenoh-link-unixpipe" }
 zenoh-link-unixsock_stream = { version = "=1.8.0", path = "io/zenoh-links/zenoh-link-unixsock_stream" }
 zenoh-link-bt-gatt = { version = "1.8.0", path = "io/zenoh-links/zenoh-link-bt-gatt" }
+zenoh-link-bt-l2cap-tls = { version = "1.8.0", path = "io/zenoh-links/zenoh-link-bt-l2cap-tls" }
 zenoh-link-vsock = { version = "=1.8.0", path = "io/zenoh-links/zenoh-link-vsock" }
 zenoh-link-ws = { version = "=1.8.0", path = "io/zenoh-links/zenoh-link-ws" }
 zenoh-macros = { version = "=1.8.0", path = "commons/zenoh-macros" }

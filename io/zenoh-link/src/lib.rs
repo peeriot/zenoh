@@ -20,11 +20,18 @@
 use std::collections::HashMap;
 
 use zenoh_config::Config;
-#[cfg(feature = "transport_bt_gatt")]
+#[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
 pub use zenoh_link_bt_gatt as bt_gatt;
-#[cfg(feature = "transport_bt_gatt")]
+#[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
 use zenoh_link_bt_gatt::{
     BtGattLocatorInspector, LinkManagerUnicastBtGatt, BT_GATT_LOCATOR_PREFIX,
+};
+#[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+pub use zenoh_link_bt_l2cap_tls as bt_l2cap_tls;
+#[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+use zenoh_link_bt_l2cap_tls::{
+    BtL2capTlsConfigurator, BtL2capTlsLocatorInspector, LinkManagerUnicastBtL2capTls,
+    BT_L2CAP_TLS_LOCATOR_PREFIX,
 };
 pub use zenoh_link_commons::*;
 #[cfg(feature = "transport_quic")]
@@ -100,6 +107,8 @@ pub enum LinkKind {
     Vscock,
     Ws,
     BtGatt,
+    #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+    BtL2capTls,
 }
 
 impl LinkKind {
@@ -114,8 +123,10 @@ impl LinkKind {
                 UDP_LOCATOR_PREFIX => supported_links.push(LinkKind::Udp),
                 #[cfg(feature = "transport_tls")]
                 TLS_LOCATOR_PREFIX => supported_links.push(LinkKind::Tls),
-                #[cfg(feature = "transport_bt_gatt")]
+                #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
                 BT_GATT_LOCATOR_PREFIX => supported_links.push(LinkKind::BtGatt),
+                #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+                BT_L2CAP_TLS_LOCATOR_PREFIX => supported_links.push(LinkKind::BtL2capTls),
                 #[cfg(all(feature = "transport_quic_datagram", not(feature = "transport_quic")))]
                 QUIC_DATAGRAM_LOCATOR_PREFIX => supported_links.push(LinkKind::QuicDatagram),
                 #[cfg(all(feature = "transport_quic", not(feature = "transport_quic_datagram")))]
@@ -155,8 +166,10 @@ impl TryFrom<&Locator> for LinkKind {
             UDP_LOCATOR_PREFIX => Ok(LinkKind::Udp),
             #[cfg(feature = "transport_tls")]
             TLS_LOCATOR_PREFIX => Ok(LinkKind::Tls),
-            #[cfg(feature = "transport_bt_gatt")]
+            #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
             BT_GATT_LOCATOR_PREFIX => Ok(LinkKind::BtGatt),
+            #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+            BT_L2CAP_TLS_LOCATOR_PREFIX => Ok(LinkKind::BtL2capTls),
             #[cfg(all(feature = "transport_quic_datagram", not(feature = "transport_quic")))]
             QUIC_DATAGRAM_LOCATOR_PREFIX => {
                 if !QuicDatagramLocatorInspector.is_reliable(locator)? {
@@ -222,8 +235,10 @@ pub const ALL_SUPPORTED_LINKS: &[LinkKind] = &[
     LinkKind::Ws,
     #[cfg(all(feature = "transport_unixsock-stream", target_family = "unix"))]
     LinkKind::UnixsockStream,
-    #[cfg(feature = "transport_bt_gatt")]
+    #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
     LinkKind::BtGatt,
+    #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+    LinkKind::BtL2capTls,
     #[cfg(feature = "transport_serial")]
     LinkKind::Serial,
     #[cfg(feature = "transport_unixpipe")]
@@ -250,8 +265,10 @@ pub struct LocatorInspector {
     unixsock_stream_inspector: UnixSockStreamLocatorInspector,
     #[cfg(feature = "transport_serial")]
     serial_inspector: SerialLocatorInspector,
-    #[cfg(feature = "transport_bt_gatt")]
+    #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
     bt_gatt_inspector: BtGattLocatorInspector,
+    #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+    bt_l2cap_tls_inspector: BtL2capTlsLocatorInspector,
     #[cfg(feature = "transport_unixpipe")]
     unixpipe_inspector: UnixPipeLocatorInspector,
     #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
@@ -270,8 +287,10 @@ impl LocatorInspector {
             LinkKind::Tls => self.tls_inspector.is_reliable(locator),
             #[cfg(feature = "transport_quic")]
             LinkKind::Quic => self.quic_inspector.is_reliable(locator),
-            #[cfg(feature = "transport_bt_gatt")]
+            #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
             LinkKind::BtGatt => self.bt_gatt_inspector.is_reliable(locator),
+            #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+            LinkKind::BtL2capTls => self.bt_l2cap_tls_inspector.is_reliable(locator),
             #[cfg(feature = "transport_quic_datagram")]
             LinkKind::QuicDatagram => self.quic_datagram_inspector.is_reliable(locator),
             #[cfg(all(feature = "transport_unixsock-stream", target_family = "unix"))]
@@ -309,8 +328,10 @@ impl LocatorInspector {
             LinkKind::Ws => self.ws_inspector.is_multicast(locator).await,
             #[cfg(feature = "transport_serial")]
             LinkKind::Serial => self.serial_inspector.is_multicast(locator).await,
-            #[cfg(feature = "transport_bt_gatt")]
+            #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
             LinkKind::BtGatt => self.bt_gatt_inspector.is_multicast(locator).await,
+            #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+            LinkKind::BtL2capTls => self.bt_l2cap_tls_inspector.is_multicast(locator).await,
             #[cfg(feature = "transport_unixpipe")]
             LinkKind::Unixpipe => self.unixpipe_inspector.is_multicast(locator).await,
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
@@ -332,6 +353,8 @@ pub struct LinkConfigurator {
     tls_inspector: TlsConfigurator,
     #[cfg(feature = "transport_unixpipe")]
     unixpipe_inspector: UnixPipeConfigurator,
+    #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+    bt_l2cap_tls_inspector: BtL2capTlsConfigurator,
 }
 
 impl LinkConfigurator {
@@ -379,6 +402,13 @@ impl LinkConfigurator {
                 self.unixpipe_inspector.inspect_config(config),
             );
         }
+        #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+        {
+            insert_config(
+                LinkKind::BtL2capTls,
+                self.bt_l2cap_tls_inspector.inspect_config(config),
+            );
+        }
         (configs, errors)
     }
 }
@@ -417,8 +447,12 @@ impl LinkManagerBuilderUnicast {
             LinkKind::Ws => Ok(std::sync::Arc::new(LinkManagerUnicastWs::new(_manager))),
             #[cfg(feature = "transport_serial")]
             LinkKind::Serial => Ok(std::sync::Arc::new(LinkManagerUnicastSerial::new(_manager))),
-            #[cfg(feature = "transport_bt_gatt")]
+            #[cfg(all(feature = "transport_bt_gatt", target_os = "linux"))]
             LinkKind::BtGatt => Ok(std::sync::Arc::new(LinkManagerUnicastBtGatt::new(_manager))),
+            #[cfg(all(feature = "transport_bt_l2cap_tls", target_os = "linux"))]
+            LinkKind::BtL2capTls => Ok(std::sync::Arc::new(LinkManagerUnicastBtL2capTls::new(
+                _manager,
+            ))),
             #[cfg(feature = "transport_unixpipe")]
             LinkKind::Unixpipe => Ok(std::sync::Arc::new(LinkManagerUnicastPipe::new(_manager))),
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
