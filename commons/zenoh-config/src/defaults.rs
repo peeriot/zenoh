@@ -71,6 +71,7 @@ pub mod open {
 pub mod scouting {
     pub const timeout: u64 = 3000;
     pub const delay: u64 = 500;
+    pub const interface_poll_interval: u64 = 10000;
     pub mod multicast {
         pub const enabled: bool = true;
         pub const address: ([u8; 4], u16) = ([224, 0, 0, 224], 7446);
