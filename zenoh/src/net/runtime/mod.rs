@@ -18,6 +18,7 @@
 //!
 //! [Click here for Zenoh's documentation](https://docs.rs/zenoh/latest/zenoh)
 mod adminspace;
+pub(crate) mod interface_monitor;
 pub mod orchestrator;
 mod region;
 
@@ -77,7 +78,7 @@ use zenoh_transport::{
     TransportManager, TransportMulticastEventHandler, TransportPeer, TransportPeerEventHandler,
 };
 
-use self::orchestrator::StartConditions;
+use self::{interface_monitor::MonitorCounters, orchestrator::StartConditions};
 use super::{
     primitives::{DeMux, EPrimitives, Primitives},
     routing::{
@@ -197,6 +198,8 @@ pub(crate) struct RuntimeState {
     task_controller: TaskController,
     /// The scout tasks currently running, absent when nothing is scouting.
     scout_tasks: std::sync::Mutex<Option<ScoutTasks>>,
+    /// The counters of the running interface poll, absent when the poll is off.
+    interface_monitor: std::sync::Mutex<Option<Arc<MonitorCounters>>>,
     #[cfg(feature = "plugins")]
     plugins_manager: Mutex<PluginsManager>,
     start_conditions: Arc<StartConditions>,
@@ -843,6 +846,7 @@ impl RuntimeBuilder {
                 timestamp_callback,
                 task_controller: TaskController::default(),
                 scout_tasks: std::sync::Mutex::new(None),
+                interface_monitor: std::sync::Mutex::new(None),
                 #[cfg(feature = "plugins")]
                 plugins_manager: Mutex::new(plugins_manager),
                 start_conditions: Arc::new(StartConditions::default()),
@@ -1040,6 +1044,13 @@ impl Runtime {
             .as_ref()
             .map(|tasks| tasks.socket_addrs.clone())
             .unwrap_or_default()
+    }
+
+    /// The counters of the running interface poll, absent when the poll is off.
+    #[cfg(feature = "test")]
+    #[allow(dead_code)]
+    pub(crate) fn interface_monitor(&self) -> Option<Arc<MonitorCounters>> {
+        zlock!(self.state.interface_monitor).clone()
     }
 
     #[cfg(feature = "shared-memory")]

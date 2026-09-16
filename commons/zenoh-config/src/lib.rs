@@ -48,7 +48,10 @@ use include::recursive_include;
 use nonempty_collections::NEVec;
 use qos::{PublisherQoSConfList, QosFilter, QosOverwriteMessage, QosOverwrites};
 use secrecy::{CloneableSecret, DebugSecret, Secret, SerializableSecret, Zeroize};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, Unexpected, Visitor},
+    Deserialize, Serialize,
+};
 use serde_json::{Map, Value};
 use validated_struct::ValidatedMapAssociatedTypes;
 pub use validated_struct::{GetError, ValidatedMap};
@@ -486,6 +489,60 @@ impl<'de> serde::Deserialize<'de> for DeprecatedRoutingPeer {
     }
 }
 
+/// How often the host interface list is polled, in milliseconds, where 0 turns the
+/// poll off.
+///
+/// It has its own type because every text format a configuration is written in casts
+/// a number to the type it is read into instead of refusing it. Read as a plain
+/// `u64`, -1 would arrive as 0 and turn the poll off, and 1.5 as a 1 ms poll - both
+/// silently, and both far from what was written. This type refuses them instead, so
+/// a file carrying one does not load and a runtime write of one is rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PollIntervalMillis(u64);
+
+impl From<u64> for PollIntervalMillis {
+    fn from(millis: u64) -> Self {
+        Self(millis)
+    }
+}
+
+impl From<PollIntervalMillis> for u64 {
+    fn from(interval: PollIntervalMillis) -> Self {
+        interval.0
+    }
+}
+
+impl<'de> Deserialize<'de> for PollIntervalMillis {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(PollIntervalMillisVisitor)
+    }
+}
+
+struct PollIntervalMillisVisitor;
+
+impl Visitor<'_> for PollIntervalMillisVisitor {
+    type Value = PollIntervalMillis;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a whole number of milliseconds, 0 or greater")
+    }
+
+    fn visit_u64<E: de::Error>(self, millis: u64) -> Result<Self::Value, E> {
+        Ok(PollIntervalMillis(millis))
+    }
+
+    fn visit_i64<E: de::Error>(self, millis: i64) -> Result<Self::Value, E> {
+        u64::try_from(millis)
+            .map(PollIntervalMillis)
+            .map_err(|_| E::invalid_value(Unexpected::Signed(millis), &self))
+    }
+
+    fn visit_f64<E: de::Error>(self, millis: f64) -> Result<Self::Value, E> {
+        Err(E::invalid_value(Unexpected::Float(millis), &self))
+    }
+}
+
 validated_struct::validator! {
     #[derive(Default)]
     #[recursive_attrs]
@@ -545,6 +602,9 @@ validated_struct::validator! {
             timeout: Option<u64>,
             /// In peer mode, the period dedicated to scouting remote peers before attempting other operations. In milliseconds.
             delay: Option<u64>,
+            /// How often the host interface list is polled for address changes, so that a node
+            /// that changed address re-advertises it. In milliseconds. 0 turns the poll off.
+            interface_poll_interval: Option<PollIntervalMillis>,
             /// The multicast scouting configuration.
             pub multicast: #[derive(Default)]
             ScoutingMulticastConf {
@@ -2054,7 +2114,71 @@ mod tests {
 
     use zenoh_protocol::core::{EndPoint, WhatAmI};
 
-    use crate::{Config, ModeDependentValue, ZenohId};
+    use crate::{defaults, Config, ModeDependentValue, PollIntervalMillis, ZenohId};
+
+    #[test]
+    fn scouting_interface_poll_interval_round_trips() {
+        let mut config = Config::default();
+        assert_eq!(config.scouting().interface_poll_interval(), &None);
+        assert_eq!(defaults::scouting::interface_poll_interval, 10000);
+
+        config
+            .insert_json5("scouting/interface_poll_interval", "250")
+            .unwrap();
+        assert_eq!(
+            config.scouting().interface_poll_interval(),
+            &Some(PollIntervalMillis::from(250))
+        );
+
+        config
+            .insert_json5("scouting/interface_poll_interval", "0")
+            .unwrap();
+        assert_eq!(
+            config.scouting().interface_poll_interval(),
+            &Some(PollIntervalMillis::from(0))
+        );
+    }
+
+    /// The poll interval is a whole number of milliseconds. Every text format casts
+    /// what it reads to the target type, so -1 would arrive as 0 - which is the off
+    /// switch - and 1.5 as a 1 ms poll, four orders of magnitude below what was
+    /// written. Both are refused instead: a file carrying one does not load, and a
+    /// runtime write of one leaves the running value where it was.
+    #[test]
+    fn scouting_interface_poll_interval_refuses_malformed_values() {
+        let mut config = Config::default();
+        config
+            .insert_json5("scouting/interface_poll_interval", "250")
+            .unwrap();
+        let running = *config.scouting().interface_poll_interval();
+
+        for value in ["-1", "1.5", "\"soon\""] {
+            assert!(
+                config
+                    .insert_json5("scouting/interface_poll_interval", value)
+                    .is_err(),
+                "{value} was accepted as a poll interval"
+            );
+            assert_eq!(config.scouting().interface_poll_interval(), &running);
+        }
+
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("{timestamp}.poll-interval.config.json5"));
+        {
+            let mut tmp = File::create(&path).unwrap();
+            tmp.write_all(b"{ scouting: { interface_poll_interval: -1 } }")
+                .unwrap();
+            tmp.flush().unwrap();
+        }
+
+        assert!(
+            Config::from_file(&path).is_err(),
+            "a configuration file asking for a negative poll interval was loaded"
+        );
+    }
 
     #[test]
     fn test_toml_config_format() {

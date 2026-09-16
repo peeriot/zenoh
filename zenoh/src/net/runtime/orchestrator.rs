@@ -16,6 +16,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::DerefMut,
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -45,7 +46,10 @@ use zenoh_protocol::{
 };
 use zenoh_result::{bail, zerror, ZResult};
 
-use super::{Runtime, RuntimeSession, ScoutTasks};
+use super::{
+    interface_monitor::{HostProbe, InterfaceMonitor, MonitorConfig},
+    Runtime, RuntimeSession, ScoutTasks,
+};
 use crate::net::{common::AutoConnect, protocol::linkstate::LinkInfo};
 
 const RCV_BUF_SIZE: usize = u16::MAX as usize;
@@ -259,7 +263,19 @@ impl Runtime {
     }
 
     async fn start_peer(&self) -> ZResult<()> {
-        let (listeners, peers, scouting, wait_scouting, listen, autoconnect, addr, ifaces, delay) = {
+        let (
+            listeners,
+            peers,
+            scouting,
+            wait_scouting,
+            listen,
+            autoconnect,
+            addr,
+            ifaces,
+            delay,
+            multicast_ttl,
+            poll_interval,
+        ) = {
             let guard = &self.state.config.lock();
             (
                 guard.listen().endpoints().peer().unwrap_or(&vec![]).clone(),
@@ -276,6 +292,10 @@ impl Runtime {
                 unwrap_or_default!(guard.scouting().multicast().address()),
                 unwrap_or_default!(guard.scouting().multicast().interface()),
                 Duration::from_millis(unwrap_or_default!(guard.scouting().delay())),
+                unwrap_or_default!(guard.scouting().multicast().ttl()),
+                Duration::from_millis(
+                    unwrap_or_default!(guard.scouting().interface_poll_interval()).into(),
+                ),
             )
         };
 
@@ -284,8 +304,19 @@ impl Runtime {
         self.connect_peers(&peers, false).await?;
 
         if scouting {
-            self.start_scout(listen, autoconnect, addr, ifaces).await?;
+            self.start_scout(listen, autoconnect, addr, ifaces.clone())
+                .await?;
         }
+
+        self.start_interface_monitor(MonitorConfig {
+            poll_interval,
+            scouting,
+            interfaces: ifaces,
+            multicast_address: addr,
+            multicast_ttl,
+            listen,
+            autoconnect,
+        });
 
         if wait_scouting
             && (scouting || !peers.is_empty())
@@ -300,7 +331,18 @@ impl Runtime {
     }
 
     async fn start_router(&self) -> ZResult<()> {
-        let (listeners, peers, scouting, listen, autoconnect, addr, ifaces, delay) = {
+        let (
+            listeners,
+            peers,
+            scouting,
+            listen,
+            autoconnect,
+            addr,
+            ifaces,
+            delay,
+            multicast_ttl,
+            poll_interval,
+        ) = {
             let guard = &self.state.config.lock();
             (
                 guard
@@ -321,6 +363,10 @@ impl Runtime {
                 unwrap_or_default!(guard.scouting().multicast().address()),
                 unwrap_or_default!(guard.scouting().multicast().interface()),
                 Duration::from_millis(unwrap_or_default!(guard.scouting().delay())),
+                unwrap_or_default!(guard.scouting().multicast().ttl()),
+                Duration::from_millis(
+                    unwrap_or_default!(guard.scouting().interface_poll_interval()).into(),
+                ),
             )
         };
 
@@ -329,11 +375,40 @@ impl Runtime {
         self.connect_peers(&peers, false).await?;
 
         if scouting {
-            self.start_scout(listen, autoconnect, addr, ifaces).await?;
+            self.start_scout(listen, autoconnect, addr, ifaces.clone())
+                .await?;
         }
+
+        self.start_interface_monitor(MonitorConfig {
+            poll_interval,
+            scouting,
+            interfaces: ifaces,
+            multicast_address: addr,
+            multicast_ttl,
+            listen,
+            autoconnect,
+        });
 
         tokio::time::sleep(delay).await;
         Ok(())
+    }
+
+    /// Starts the poll that keeps the node's own addresses current.
+    ///
+    /// An interval of zero leaves it unstarted for the life of the process: that is
+    /// the operator turning the capability off, and a later configuration write must
+    /// not be able to turn it back on.
+    fn start_interface_monitor(&self, config: MonitorConfig) {
+        if config.poll_interval.is_zero() {
+            tracing::debug!("The host interface poll is turned off");
+
+            return;
+        }
+
+        let probe = Arc::new(HostProbe::new(Runtime::downgrade(self)));
+        let monitor = InterfaceMonitor::new(Runtime::downgrade(self), config, probe);
+        *zlock!(self.state.interface_monitor) = Some(monitor.counters());
+        self.spawn_abortable(monitor.run());
     }
 
     async fn start_scout(
@@ -352,6 +427,10 @@ impl Runtime {
         let (mcast_socket, ucast_sockets) =
             Runtime::bind_scout_sockets(&addr, &ifaces, multicast_ttl).await?;
         if ifaces.is_empty() {
+            // The callers carry on without scouting, so this is the only place the
+            // node says it is not answering scouts at all.
+            tracing::warn!("No interface to scout on, not answering scouts on {}", addr);
+
             return Ok(ScoutStart::NoUsableInterfaces);
         }
 
@@ -364,7 +443,6 @@ impl Runtime {
     /// ones are stopped, so the node keeps answering scouts across the move. A step
     /// that does not work out leaves the running tasks and their sockets alone:
     /// scouting on the old addresses beats scouting on none.
-    #[allow(dead_code)]
     pub(crate) async fn rebuild_scout_tasks(
         &self,
         listen: bool,
@@ -1615,7 +1693,6 @@ impl Runtime {
     ///
     /// Takes the control lock and then the tables write lock, the order every other
     /// tables writer uses, so a caller already holding either of them deadlocks.
-    #[allow(dead_code)]
     pub(crate) fn announce_locators(&self) {
         let router = self.router();
         let _ctrl_lock = zlock!(router.tables.ctrl_lock);
