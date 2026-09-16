@@ -403,6 +403,17 @@ impl HatBaseTrait for Hat {
             .unwrap_or_else(|| "graph {}".to_string())
     }
 
+    fn announce_locators(&mut self) {
+        let net = match self {
+            Self::Uninit(..) => None,
+            Self::Gossip { gossip } => gossip.as_mut().map(NetMut::Gossip),
+            Self::Network { network, .. } => network.as_mut().map(NetMut::Network),
+        };
+        if let Some(net) = net {
+            net.announce_locators();
+        }
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -610,6 +621,13 @@ impl NetMut<'_> {
         match self {
             Self::Gossip(n) => n.remove_link(zid),
             Self::Network(n) => n.remove_link(zid),
+        }
+    }
+
+    pub(crate) fn announce_locators(self) {
+        match self {
+            Self::Gossip(n) => n.announce_locators(),
+            Self::Network(n) => n.announce_locators(),
         }
     }
 

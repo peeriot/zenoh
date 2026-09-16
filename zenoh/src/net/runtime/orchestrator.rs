@@ -1611,6 +1611,20 @@ impl Runtime {
         }
     }
 
+    /// Pushes the node's own locator set to every peer whose link is established.
+    ///
+    /// Takes the control lock and then the tables write lock, the order every other
+    /// tables writer uses, so a caller already holding either of them deadlocks.
+    #[allow(dead_code)]
+    pub(crate) fn announce_locators(&self) {
+        let router = self.router();
+        let _ctrl_lock = zlock!(router.tables.ctrl_lock);
+        let mut wtables = zwrite!(router.tables.tables);
+        for hat in wtables.hats.values_mut() {
+            hat.announce_locators();
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn update_network(&self) -> ZResult<()> {
         let router = self.router();

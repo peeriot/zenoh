@@ -33,6 +33,7 @@ use zenoh_protocol::{
 };
 use zenoh_transport::unicast::TransportUnicast;
 
+use super::advance_self_sn;
 use crate::net::{
     codec::Zenoh080Routing,
     common::AutoConnect,
@@ -419,6 +420,25 @@ impl Gossip {
         }
     }
 
+    /// Pushes the node's own entry, carrying its current locator set, on every link.
+    ///
+    /// The locator set is read at send time, so the caller passes none. No link is
+    /// opened, and no other node's entry is read, sent or changed.
+    pub(crate) fn announce_locators(&mut self) {
+        advance_self_sn(&mut self.graph[self.idx].sn);
+        self.send_on_links(
+            vec![(
+                self.idx,
+                Details {
+                    zid: true,
+                    locators: true,
+                    links: true,
+                },
+            )],
+            |_link| true,
+        );
+    }
+
     #[allow(clippy::incompatible_msrv)]
     pub(crate) fn add_link(&mut self, transport: TransportUnicast, remote_bound: Bound) -> usize {
         let free_index = {
@@ -456,7 +476,7 @@ impl Gossip {
                 )
             }
         };
-        self.graph[self.idx].sn += 1;
+        advance_self_sn(&mut self.graph[self.idx].sn);
 
         // Send updated self linkstate on all existing links except new one
         self.links
