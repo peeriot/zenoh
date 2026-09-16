@@ -135,7 +135,9 @@ libc = { workspace = true }
 predicates = { workspace = true }
 regex = { workspace = true }
 test-case = { workspace = true }
-tokio = { workspace = true }
+# `test-util` carries the pausable clock the interface poll tests drive. Being a
+# dev-dependency feature, the resolver keeps it out of every non-test build.
+tokio = { workspace = true, features = ["test-util"] }
 tracing-capture = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-tunnel = { workspace = true }
