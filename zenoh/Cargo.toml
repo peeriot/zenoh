@@ -141,6 +141,10 @@ tracing-capture = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-tunnel = { workspace = true }
 zenoh-protocol = { workspace = true, features = ["test"] }
+# The interface cache is only replaceable behind this feature, because what is in
+# it decides the addresses a node advertises and binds. As a dev-dependency
+# feature the resolver keeps it out of every non-test build.
+zenoh-util = { workspace = true, features = ["test"] }
 zenoh-test = { workspace = true, features = ["internal", "unstable"] }
 
 [build-dependencies]
