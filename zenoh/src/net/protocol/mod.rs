@@ -16,3 +16,12 @@ pub(crate) mod linkstate;
 pub(crate) mod network;
 
 pub(crate) const ROUTERS_NET_NAME: &str = "[Routers Network]";
+
+/// Advances a node's own link-state sequence number.
+///
+/// It saturates rather than wraps, because a remote peer can park the local entry at
+/// `u64::MAX` through the receive path: an overflow would take the send path down, and
+/// a wrap would make every peer drop everything the node sends from then on.
+pub(crate) fn advance_self_sn(sn: &mut u64) {
+    *sn = sn.saturating_add(1);
+}
