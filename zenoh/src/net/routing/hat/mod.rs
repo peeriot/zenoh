@@ -229,6 +229,12 @@ pub(crate) trait HatBaseTrait: Any {
         Ok(())
     }
 
+    /// Pushes the node's own link-state entry, carrying its current locator set, on
+    /// every link this hat holds.
+    ///
+    /// A hat without a link-state plane has nothing to announce.
+    fn announce_locators(&mut self) {}
+
     fn links_info(&self) -> HashMap<ZenohIdProto, LinkInfo> {
         HashMap::new()
     }

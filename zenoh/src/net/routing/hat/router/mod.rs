@@ -531,6 +531,12 @@ impl HatBaseTrait for Hat {
         Ok(())
     }
 
+    fn announce_locators(&mut self) {
+        if let Some(net) = self.routers_net.as_mut() {
+            net.announce_locators();
+        }
+    }
+
     fn links_info(&self) -> HashMap<ZenohIdProto, crate::net::protocol::linkstate::LinkInfo> {
         if let Some(net) = &self.routers_net {
             net.links_info()
