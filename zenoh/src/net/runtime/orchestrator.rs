@@ -52,6 +52,8 @@ const RCV_BUF_SIZE: usize = u16::MAX as usize;
 const SCOUT_INITIAL_PERIOD: Duration = Duration::from_millis(1_000);
 const SCOUT_MAX_PERIOD: Duration = Duration::from_millis(8_000);
 const SCOUT_PERIOD_INCREASE_FACTOR: u32 = 2;
+const SCOUT_RECV_ERROR_INITIAL_PERIOD: Duration = Duration::from_millis(100);
+const SCOUT_RECV_ERROR_MAX_PERIOD: Duration = Duration::from_millis(5_000);
 
 // TODO(fuzzypixelz): collapse per-interface scout sockets into one wildcard socket
 // per address family. Select egress with `set_multicast_if_*` before send;
@@ -1045,9 +1047,11 @@ impl Runtime {
             let f = f.clone();
             async move {
                 let mut buf = vec![0; RCV_BUF_SIZE];
+                let mut backoff = ScoutRecvBackoff::new();
                 loop {
                     match socket.socket.recv_from(&mut buf).await {
                         Ok((n, peer)) => {
+                            backoff.reset();
                             let mut reader = buf.as_slice()[..n].reader();
                             let codec = Zenoh080::new();
                             let res: Result<ScoutingMessage, DidntRead> = codec.read(&mut reader);
@@ -1070,7 +1074,10 @@ impl Runtime {
                                 );
                             }
                         }
-                        Err(e) => tracing::debug!("Error receiving UDP datagram: {}", e),
+                        Err(e) => {
+                            tracing::warn!("Error receiving UDP datagram: {}", e);
+                            tokio::time::sleep(backoff.next_delay()).await;
+                        }
                     }
                 }
             }
@@ -1327,9 +1334,20 @@ impl Runtime {
             })
             .map(|(iface, port)| SocketAddr::new(iface, port))
             .collect();
+        let mut backoff = ScoutRecvBackoff::new();
         tracing::debug!("Waiting for UDP datagram...");
         loop {
-            let (n, peer) = mcast_socket.recv_from(&mut buf).await.unwrap();
+            let (n, peer) = match mcast_socket.recv_from(&mut buf).await {
+                Ok(datagram) => {
+                    backoff.reset();
+                    datagram
+                }
+                Err(err) => {
+                    tracing::warn!("Error receiving UDP datagram: {}", err);
+                    tokio::time::sleep(backoff.next_delay()).await;
+                    continue;
+                }
+            };
             if local_addrs.contains(&peer) {
                 tracing::trace!("Ignore UDP datagram from own socket");
                 continue;
@@ -1471,6 +1489,28 @@ impl Runtime {
     }
 }
 
+/// Retry delay for a failing read on a scout socket. A socket that errors on every
+/// read would otherwise spin its receive loop at full speed for as long as it lives.
+struct ScoutRecvBackoff(Duration);
+
+impl ScoutRecvBackoff {
+    const fn new() -> Self {
+        Self(SCOUT_RECV_ERROR_INITIAL_PERIOD)
+    }
+
+    /// Returns the delay to wait before the next read, and grows it towards the bound.
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.0;
+        self.0 = (delay * SCOUT_PERIOD_INCREASE_FACTOR).min(SCOUT_RECV_ERROR_MAX_PERIOD);
+
+        delay
+    }
+
+    fn reset(&mut self) {
+        self.0 = SCOUT_RECV_ERROR_INITIAL_PERIOD;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::time::{timeout, Duration};
@@ -1524,5 +1564,22 @@ mod tests {
             .expect("timed out waiting for loopback multicast packet")
             .unwrap();
         assert_eq!(&buf[..n], payload);
+    }
+
+    #[test]
+    fn scout_recv_backoff_grows_to_the_bound_and_resets() {
+        let mut backoff = ScoutRecvBackoff::new();
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD);
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD * 2);
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD * 4);
+
+        for _ in 0..10 {
+            backoff.next_delay();
+        }
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_MAX_PERIOD);
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_MAX_PERIOD);
+
+        backoff.reset();
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD);
     }
 }
