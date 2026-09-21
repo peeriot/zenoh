@@ -16,6 +16,7 @@ use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     ops::DerefMut,
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -42,17 +43,34 @@ use zenoh_protocol::{
 };
 use zenoh_result::{bail, zerror, ZResult};
 
-use super::{Runtime, RuntimeSession};
+use super::{
+    interface_monitor::{HostProbe, InterfaceMonitor, MonitorConfig},
+    Runtime, RuntimeSession, ScoutTasks,
+};
 use crate::net::{common::AutoConnect, protocol::linkstate::LinkInfo};
 
 const RCV_BUF_SIZE: usize = u16::MAX as usize;
 const SCOUT_INITIAL_PERIOD: Duration = Duration::from_millis(1_000);
 const SCOUT_MAX_PERIOD: Duration = Duration::from_millis(8_000);
 const SCOUT_PERIOD_INCREASE_FACTOR: u32 = 2;
+const SCOUT_RECV_ERROR_INITIAL_PERIOD: Duration = Duration::from_millis(100);
+const SCOUT_RECV_ERROR_MAX_PERIOD: Duration = Duration::from_millis(5_000);
 
 pub enum Loop {
     Continue,
     Break,
+}
+
+/// What came of an attempt to start the scout tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScoutStart {
+    /// The tasks the configuration asks for are running.
+    Started,
+    /// No configured interface resolves to an address, so nothing was bound.
+    NoUsableInterfaces,
+    /// No interface could be bound, so no responder was started: answering a scout
+    /// needs a socket to answer it on.
+    NoUsableSockets,
 }
 
 #[derive(Default, Debug)]
@@ -202,7 +220,19 @@ impl Runtime {
     }
 
     async fn start_peer(&self) -> ZResult<()> {
-        let (listeners, peers, scouting, wait_scouting, listen, autoconnect, addr, ifaces, delay) = {
+        let (
+            listeners,
+            peers,
+            scouting,
+            wait_scouting,
+            listen,
+            autoconnect,
+            addr,
+            ifaces,
+            delay,
+            multicast_ttl,
+            poll_interval,
+        ) = {
             let guard = &self.state.config.lock();
             (
                 guard.listen().endpoints().peer().unwrap_or(&vec![]).clone(),
@@ -219,6 +249,10 @@ impl Runtime {
                 unwrap_or_default!(guard.scouting().multicast().address()),
                 unwrap_or_default!(guard.scouting().multicast().interface()),
                 Duration::from_millis(unwrap_or_default!(guard.scouting().delay())),
+                unwrap_or_default!(guard.scouting().multicast().ttl()),
+                Duration::from_millis(
+                    unwrap_or_default!(guard.scouting().interface_poll_interval()).into(),
+                ),
             )
         };
 
@@ -227,8 +261,19 @@ impl Runtime {
         self.connect_peers(&peers, false).await?;
 
         if scouting {
-            self.start_scout(listen, autoconnect, addr, ifaces).await?;
+            self.start_scout(listen, autoconnect, addr, ifaces.clone())
+                .await?;
         }
+
+        self.start_interface_monitor(MonitorConfig {
+            poll_interval,
+            scouting,
+            interfaces: ifaces,
+            multicast_address: addr,
+            multicast_ttl,
+            listen,
+            autoconnect,
+        });
 
         if wait_scouting
             && (scouting || !peers.is_empty())
@@ -243,7 +288,18 @@ impl Runtime {
     }
 
     async fn start_router(&self) -> ZResult<()> {
-        let (listeners, peers, scouting, listen, autoconnect, addr, ifaces, delay) = {
+        let (
+            listeners,
+            peers,
+            scouting,
+            listen,
+            autoconnect,
+            addr,
+            ifaces,
+            delay,
+            multicast_ttl,
+            poll_interval,
+        ) = {
             let guard = &self.state.config.lock();
             (
                 guard
@@ -264,6 +320,10 @@ impl Runtime {
                 unwrap_or_default!(guard.scouting().multicast().address()),
                 unwrap_or_default!(guard.scouting().multicast().interface()),
                 Duration::from_millis(unwrap_or_default!(guard.scouting().delay())),
+                unwrap_or_default!(guard.scouting().multicast().ttl()),
+                Duration::from_millis(
+                    unwrap_or_default!(guard.scouting().interface_poll_interval()).into(),
+                ),
             )
         };
 
@@ -272,11 +332,40 @@ impl Runtime {
         self.connect_peers(&peers, false).await?;
 
         if scouting {
-            self.start_scout(listen, autoconnect, addr, ifaces).await?;
+            self.start_scout(listen, autoconnect, addr, ifaces.clone())
+                .await?;
         }
+
+        self.start_interface_monitor(MonitorConfig {
+            poll_interval,
+            scouting,
+            interfaces: ifaces,
+            multicast_address: addr,
+            multicast_ttl,
+            listen,
+            autoconnect,
+        });
 
         tokio::time::sleep(delay).await;
         Ok(())
+    }
+
+    /// Starts the poll that keeps the node's own addresses current.
+    ///
+    /// An interval of zero leaves it unstarted for the life of the process: that is
+    /// the operator turning the capability off, and a later configuration write must
+    /// not be able to turn it back on.
+    fn start_interface_monitor(&self, config: MonitorConfig) {
+        if config.poll_interval.is_zero() {
+            tracing::debug!("The host interface poll is turned off");
+
+            return;
+        }
+
+        let probe = Arc::new(HostProbe::new(Runtime::downgrade(self)));
+        let monitor = InterfaceMonitor::new(Runtime::downgrade(self), config, probe);
+        *zlock!(self.state.interface_monitor) = Some(monitor.counters());
+        self.spawn_abortable(monitor.run());
     }
 
     async fn start_scout(
@@ -285,49 +374,169 @@ impl Runtime {
         autoconnect: AutoConnect,
         addr: SocketAddr,
         ifaces: String,
-    ) -> ZResult<()> {
+    ) -> ZResult<ScoutStart> {
         let multicast_ttl = {
             let config_guard = self.config().lock();
             let config = &config_guard;
             unwrap_or_default!(config.scouting().multicast().ttl())
         };
         let ifaces = Runtime::get_interfaces(&ifaces);
-        let mcast_socket = Runtime::bind_mcast_port(&addr, &ifaces, multicast_ttl).await?;
-        if !ifaces.is_empty() {
-            let sockets: Vec<UdpSocket> = ifaces
-                .into_iter()
-                .filter_map(|iface| Runtime::bind_ucast_port(iface, multicast_ttl).ok())
-                .collect();
-            if !sockets.is_empty() {
-                let this = self.clone();
-                match (listen, autoconnect.is_enabled()) {
-                    (true, true) => {
-                        self.spawn_abortable(async move {
+        let (mcast_socket, ucast_sockets) =
+            Runtime::bind_scout_sockets(&addr, &ifaces, multicast_ttl).await?;
+        if ifaces.is_empty() {
+            // The callers carry on without scouting, so this is the only place the
+            // node says it is not answering scouts at all.
+            tracing::warn!("No interface to scout on, not answering scouts on {}", addr);
+
+            return Ok(ScoutStart::NoUsableInterfaces);
+        }
+
+        Ok(self.spawn_scout_tasks(mcast_socket, ucast_sockets, listen, autoconnect, addr))
+    }
+
+    /// Binds a fresh set of scout sockets and moves the scout tasks onto them.
+    ///
+    /// The new sockets are bound and their tasks are running before the previous
+    /// ones are stopped, so the node keeps answering scouts across the move. A step
+    /// that does not work out leaves the running tasks and their sockets alone:
+    /// scouting on the old addresses beats scouting on none.
+    pub(crate) async fn rebuild_scout_tasks(
+        &self,
+        listen: bool,
+        autoconnect: AutoConnect,
+        addr: SocketAddr,
+        ifaces: &str,
+        multicast_ttl: u32,
+    ) -> ScoutStart {
+        let ifaces = Runtime::get_interfaces_strict(ifaces);
+        if ifaces.is_empty() {
+            tracing::warn!("No multicast interface left, keeping the current scout sockets");
+
+            return ScoutStart::NoUsableInterfaces;
+        }
+
+        let (mcast_socket, ucast_sockets) =
+            match Runtime::bind_scout_sockets(&addr, &ifaces, multicast_ttl).await {
+                Ok(sockets) => sockets,
+                Err(err) => {
+                    tracing::warn!(
+                        "Unable to bind new scout sockets, keeping the current ones: {}",
+                        err
+                    );
+
+                    return ScoutStart::NoUsableSockets;
+                }
+            };
+
+        let previous_token = self.scout_token();
+        let previous_addrs = self.scout_socket_addrs();
+        let outcome =
+            self.spawn_scout_tasks(mcast_socket, ucast_sockets, listen, autoconnect, addr);
+        if outcome != ScoutStart::Started {
+            return outcome;
+        }
+
+        if let Some(token) = previous_token {
+            token.cancel();
+        }
+        tracing::info!(
+            "Scouting moved from {:?} to {:?}",
+            previous_addrs,
+            self.scout_socket_addrs()
+        );
+
+        outcome
+    }
+
+    /// Binds the socket the scouts arrive on, and one answering socket per interface.
+    ///
+    /// The answering set comes back short, or empty, when the host does not currently
+    /// hold one of the addresses. The multicast bind is the one that has to succeed.
+    /// The time to live is a parameter rather than a configuration read, so that a
+    /// caller rebuilding these sockets holds no configuration guard while it binds.
+    pub(crate) async fn bind_scout_sockets(
+        addr: &SocketAddr,
+        ifaces: &[IpAddr],
+        multicast_ttl: u32,
+    ) -> ZResult<(UdpSocket, Vec<UdpSocket>)> {
+        let mcast_socket = Runtime::bind_mcast_port(addr, ifaces, multicast_ttl).await?;
+        let ucast_sockets = ifaces
+            .iter()
+            .filter_map(|iface| Runtime::bind_ucast_port(*iface, multicast_ttl).ok())
+            .collect();
+
+        Ok((mcast_socket, ucast_sockets))
+    }
+
+    /// Starts the scout tasks the configuration asks for on already bound sockets.
+    ///
+    /// Answering a scout means sending from the socket closest to the sender, so a
+    /// responder without a single answering socket is refused here rather than
+    /// started and left to fail on its first datagram.
+    pub(crate) fn spawn_scout_tasks(
+        &self,
+        mcast_socket: UdpSocket,
+        ucast_sockets: Vec<UdpSocket>,
+        listen: bool,
+        autoconnect: AutoConnect,
+        addr: SocketAddr,
+    ) -> ScoutStart {
+        if ucast_sockets.is_empty() {
+            tracing::warn!("No socket to answer scouts on, not scouting on {}", addr);
+
+            return ScoutStart::NoUsableSockets;
+        }
+
+        let socket_addrs = ucast_sockets
+            .iter()
+            .filter_map(|socket| socket.local_addr().ok())
+            .collect();
+        let token = self.get_cancellation_token();
+        let task_token = token.clone();
+        let this = self.clone();
+        match (listen, autoconnect.is_enabled()) {
+            (true, true) => {
+                self.spawn_abortable(async move {
+                    task_token
+                        .run_until_cancelled(async move {
                             tokio::select! {
-                                _ = this.responder(&mcast_socket, &sockets) => {},
+                                _ = this.responder(&mcast_socket, &ucast_sockets) => {},
                                 _ = this.autoconnect_all(
-                                    &sockets,
+                                    &ucast_sockets,
                                     autoconnect,
                                     &addr
                                 ) => {},
                             }
-                        });
-                    }
-                    (true, false) => {
-                        self.spawn_abortable(async move {
-                            this.responder(&mcast_socket, &sockets).await;
-                        });
-                    }
-                    (false, true) => {
-                        self.spawn_abortable(async move {
-                            this.autoconnect_all(&sockets, autoconnect, &addr).await
-                        });
-                    }
-                    _ => {}
-                }
+                        })
+                        .await;
+                });
             }
+            (true, false) => {
+                self.spawn_abortable(async move {
+                    task_token
+                        .run_until_cancelled(this.responder(&mcast_socket, &ucast_sockets))
+                        .await;
+                });
+            }
+            (false, true) => {
+                self.spawn_abortable(async move {
+                    task_token
+                        .run_until_cancelled(this.autoconnect_all(
+                            &ucast_sockets,
+                            autoconnect,
+                            &addr,
+                        ))
+                        .await;
+                });
+            }
+            _ => {}
         }
-        Ok(())
+        *zlock!(self.state.scout_tasks) = Some(ScoutTasks {
+            token,
+            socket_addrs,
+        });
+
+        ScoutStart::Started
     }
 
     async fn connect_peers(&self, peers: &[EndPoint], single_link: bool) -> ZResult<()> {
@@ -547,24 +756,42 @@ impl Runtime {
     }
 
     fn print_locators(&self) {
-        let mut locators = self.state.locators.write().unwrap();
-        *locators = self.manager().get_locators();
-        for locator in &*locators {
+        self.store_locators(self.manager().get_locators());
+    }
+
+    /// Stores the locator set the node can be reached at, and reports it.
+    ///
+    /// The caller computes the set, because computing it blocks the thread and
+    /// doing that under this lock stalls every reader of the locator set.
+    pub(crate) fn store_locators(&self, locators: Vec<Locator>) {
+        let mut stored = self.state.locators.write().unwrap();
+        *stored = locators;
+        for locator in &*stored {
             tracing::info!("Zenoh can be reached at: {}", locator);
         }
     }
 
     pub fn get_interfaces(names: &str) -> Vec<IpAddr> {
+        let ifaces = Self::get_interfaces_strict(names);
+        if names == "auto" && ifaces.is_empty() {
+            tracing::warn!(
+                "Unable to find active, non-loopback multicast interface. Will use [::]."
+            );
+
+            vec![Ipv6Addr::UNSPECIFIED.into()]
+        } else {
+            ifaces
+        }
+    }
+
+    /// Resolves the configured multicast interface names to addresses, with no fallback.
+    ///
+    /// `get_interfaces` answers `auto` with `[::]` when nothing resolves, which reads
+    /// the same as a host that has one usable wildcard interface. A caller that has to
+    /// tell those two apart asks here.
+    pub(crate) fn get_interfaces_strict(names: &str) -> Vec<IpAddr> {
         if names == "auto" {
-            let ifaces = zenoh_util::net::get_multicast_interfaces();
-            if ifaces.is_empty() {
-                tracing::warn!(
-                    "Unable to find active, non-loopback multicast interface. Will use [::]."
-                );
-                vec![Ipv6Addr::UNSPECIFIED.into()]
-            } else {
-                ifaces
-            }
+            zenoh_util::net::get_multicast_interfaces()
         } else {
             names
                 .split(',')
@@ -903,9 +1130,11 @@ impl Runtime {
             let f = f.clone();
             async move {
                 let mut buf = vec![0; RCV_BUF_SIZE];
+                let mut backoff = ScoutRecvBackoff::new();
                 loop {
                     match socket.recv_from(&mut buf).await {
                         Ok((n, peer)) => {
+                            backoff.reset();
                             let mut reader = buf.as_slice()[..n].reader();
                             let codec = Zenoh080::new();
                             let res: Result<ScoutingMessage, DidntRead> = codec.read(&mut reader);
@@ -928,7 +1157,10 @@ impl Runtime {
                                 );
                             }
                         }
-                        Err(e) => tracing::debug!("Error receiving UDP datagram: {}", e),
+                        Err(e) => {
+                            tracing::warn!("Error receiving UDP datagram: {}", e);
+                            tokio::time::sleep(backoff.next_delay()).await;
+                        }
                     }
                 }
             }
@@ -1131,84 +1363,103 @@ impl Runtime {
         .await
     }
 
-    async fn responder(&self, mcast_socket: &UdpSocket, ucast_sockets: &[UdpSocket]) {
-        fn get_best_match<'a>(addr: &IpAddr, sockets: &'a [UdpSocket]) -> Option<&'a UdpSocket> {
-            fn octets(addr: &IpAddr) -> Vec<u8> {
-                match addr {
-                    IpAddr::V4(addr) => addr.octets().to_vec(),
-                    IpAddr::V6(addr) => addr.octets().to_vec(),
-                }
-            }
-            fn matching_octets(addr: &IpAddr, sock: &UdpSocket) -> usize {
-                octets(addr)
-                    .iter()
-                    .zip(octets(&sock.local_addr().unwrap().ip()))
-                    .map(|(x, y)| x.cmp(&y))
-                    .position(|ord| ord != std::cmp::Ordering::Equal)
-                    .unwrap_or_else(|| octets(addr).len())
-            }
-            sockets
-                .iter()
-                .filter(|sock| sock.local_addr().is_ok())
-                .max_by(|sock1, sock2| {
-                    matching_octets(addr, sock1).cmp(&matching_octets(addr, sock2))
-                })
+    /// Answers a single scout datagram, or reports that there is nothing to answer.
+    ///
+    /// The answer names the socket it has to leave from, because a peer expects the
+    /// reply from the interface closest to it. A datagram from one of the node's own
+    /// addresses is its own scout coming back and is never answered.
+    pub(crate) fn scout_reply<'a>(
+        &self,
+        peer: SocketAddr,
+        datagram: &[u8],
+        local_addrs: &[SocketAddr],
+        ucast_sockets: &'a [UdpSocket],
+    ) -> Option<(ScoutingMessage, &'a UdpSocket)> {
+        if local_addrs.contains(&peer) {
+            tracing::trace!("Ignore UDP datagram from own socket");
+            return None;
         }
 
+        let mut reader = datagram.reader();
+        let codec = Zenoh080::new();
+        let res: Result<ScoutingMessage, DidntRead> = codec.read(&mut reader);
+        let Ok(msg) = res else {
+            tracing::trace!(
+                "Received unexpected UDP datagram from {}: {:?}",
+                peer,
+                datagram
+            );
+            return None;
+        };
+
+        tracing::trace!("Received {:?} from {}", msg.body, peer);
+        let ScoutingBody::Scout(Scout { what, .. }) = &msg.body else {
+            return None;
+        };
+        if !what.matches(self.whatami()) {
+            return None;
+        }
+
+        let Some(socket) = get_best_match(&peer.ip(), ucast_sockets) else {
+            tracing::warn!(
+                "No socket to answer the scout from {} on, dropping it",
+                peer
+            );
+            return None;
+        };
+
+        let hello: ScoutingMessage = HelloProto {
+            version: zenoh_protocol::VERSION,
+            whatami: self.whatami(),
+            zid: self.manager().zid(),
+            locators: self.get_locators(),
+        }
+        .into();
+
+        Some((hello, socket))
+    }
+
+    async fn responder(&self, mcast_socket: &UdpSocket, ucast_sockets: &[UdpSocket]) {
         let mut buf = vec![0; RCV_BUF_SIZE];
         let local_addrs: Vec<SocketAddr> = ucast_sockets
             .iter()
             .filter_map(|sock| sock.local_addr().ok())
             .collect();
+        let mut backoff = ScoutRecvBackoff::new();
         tracing::debug!("Waiting for UDP datagram...");
         loop {
-            let (n, peer) = mcast_socket.recv_from(&mut buf).await.unwrap();
-            if local_addrs.contains(&peer) {
-                tracing::trace!("Ignore UDP datagram from own socket");
-                continue;
-            }
-
-            let mut reader = buf.as_slice()[..n].reader();
-            let codec = Zenoh080::new();
-            let res: Result<ScoutingMessage, DidntRead> = codec.read(&mut reader);
-            if let Ok(msg) = res {
-                tracing::trace!("Received {:?} from {}", msg.body, peer);
-                if let ScoutingBody::Scout(Scout { what, .. }) = &msg.body {
-                    if what.matches(self.whatami()) {
-                        let mut wbuf = vec![];
-                        let mut writer = wbuf.writer();
-                        let codec = Zenoh080::new();
-
-                        let zid = self.manager().zid();
-                        let hello: ScoutingMessage = HelloProto {
-                            version: zenoh_protocol::VERSION,
-                            whatami: self.whatami(),
-                            zid,
-                            locators: self.get_locators(),
-                        }
-                        .into();
-                        let socket = get_best_match(&peer.ip(), ucast_sockets).unwrap();
-                        tracing::trace!(
-                            "Send {:?} to {} on interface {}",
-                            hello.body,
-                            peer,
-                            socket
-                                .local_addr()
-                                .map_or("unknown".to_string(), |addr| addr.ip().to_string())
-                        );
-                        codec.write(&mut writer, &hello).unwrap();
-
-                        if let Err(err) = socket.send_to(wbuf.as_slice(), peer).await {
-                            tracing::error!("Unable to send {:?} to {}: {}", hello.body, peer, err);
-                        }
-                    }
+            let (n, peer) = match mcast_socket.recv_from(&mut buf).await {
+                Ok(datagram) => {
+                    backoff.reset();
+                    datagram
                 }
-            } else {
-                tracing::trace!(
-                    "Received unexpected UDP datagram from {}: {:?}",
-                    peer,
-                    &buf.as_slice()[..n]
-                );
+                Err(err) => {
+                    tracing::warn!("Error receiving UDP datagram: {}", err);
+                    tokio::time::sleep(backoff.next_delay()).await;
+                    continue;
+                }
+            };
+            let Some((hello, socket)) =
+                self.scout_reply(peer, &buf.as_slice()[..n], &local_addrs, ucast_sockets)
+            else {
+                continue;
+            };
+
+            tracing::trace!(
+                "Send {:?} to {} on interface {}",
+                hello.body,
+                peer,
+                socket
+                    .local_addr()
+                    .map_or("unknown".to_string(), |addr| addr.ip().to_string())
+            );
+            let mut wbuf = vec![];
+            let mut writer = wbuf.writer();
+            let codec = Zenoh080::new();
+            codec.write(&mut writer, &hello).unwrap();
+
+            if let Err(err) = socket.send_to(wbuf.as_slice(), peer).await {
+                tracing::error!("Unable to send {:?} to {}: {}", hello.body, peer, err);
             }
         }
     }
@@ -1275,6 +1526,19 @@ impl Runtime {
         }
     }
 
+    /// Pushes the node's own locator set to every peer whose link is established.
+    ///
+    /// Takes the control lock and then the tables write lock, the order every other
+    /// tables writer uses, so a caller already holding either of them deadlocks.
+    pub(crate) fn announce_locators(&self) {
+        let router = self.router();
+        let _ctrl_lock = zlock!(router.tables.ctrl_lock);
+        let mut wtables = zwrite!(router.tables.tables);
+        for hat in wtables.hats.values_mut() {
+            hat.announce_locators();
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn update_network(&self) -> ZResult<()> {
         let router = self.router();
@@ -1295,5 +1559,117 @@ impl Runtime {
             .values()
             .flat_map(|hat| hat.links_info().into_iter())
             .collect()
+    }
+}
+
+/// Picks the socket whose address shares the longest prefix with the given one, so
+/// an answer leaves from the interface closest to whoever asked.
+fn get_best_match<'a>(addr: &IpAddr, sockets: &'a [UdpSocket]) -> Option<&'a UdpSocket> {
+    fn octets(addr: &IpAddr) -> Vec<u8> {
+        match addr {
+            IpAddr::V4(addr) => addr.octets().to_vec(),
+            IpAddr::V6(addr) => addr.octets().to_vec(),
+        }
+    }
+    fn matching_octets(addr: &IpAddr, sock: &UdpSocket) -> usize {
+        octets(addr)
+            .iter()
+            .zip(octets(&sock.local_addr().unwrap().ip()))
+            .map(|(x, y)| x.cmp(&y))
+            .position(|ord| ord != std::cmp::Ordering::Equal)
+            .unwrap_or_else(|| octets(addr).len())
+    }
+    sockets
+        .iter()
+        .filter(|sock| sock.local_addr().is_ok())
+        .max_by(|sock1, sock2| matching_octets(addr, sock1).cmp(&matching_octets(addr, sock2)))
+}
+
+/// Retry delay for a failing read on a scout socket. A socket that errors on every
+/// read would otherwise spin its receive loop at full speed for as long as it lives.
+struct ScoutRecvBackoff(Duration);
+
+impl ScoutRecvBackoff {
+    const fn new() -> Self {
+        Self(SCOUT_RECV_ERROR_INITIAL_PERIOD)
+    }
+
+    /// Returns the delay to wait before the next read, and grows it towards the bound.
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.0;
+        self.0 = (delay * SCOUT_PERIOD_INCREASE_FACTOR).min(SCOUT_RECV_ERROR_MAX_PERIOD);
+
+        delay
+    }
+
+    fn reset(&mut self) {
+        self.0 = SCOUT_RECV_ERROR_INITIAL_PERIOD;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn auto_interfaces_fall_back_to_unspecified_when_none_resolve() {
+        let _guard = lock_interface_cache();
+
+        zenoh_util::net::replace_interfaces(Vec::new());
+        assert_eq!(
+            Runtime::get_interfaces("auto"),
+            vec![IpAddr::from(Ipv6Addr::UNSPECIFIED)]
+        );
+
+        zenoh_util::net::refresh_interfaces();
+    }
+
+    #[test]
+    fn explicit_interfaces_that_resolve_to_nothing_yield_no_address() {
+        assert!(Runtime::get_interfaces("no-such-interface-42").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_strict_interface_lookup_never_falls_back() {
+        let _guard = lock_interface_cache();
+
+        zenoh_util::net::replace_interfaces(Vec::new());
+        assert!(Runtime::get_interfaces_strict("auto").is_empty());
+        assert!(Runtime::get_interfaces_strict("no-such-interface-42").is_empty());
+
+        zenoh_util::net::refresh_interfaces();
+    }
+
+    #[test]
+    fn scout_recv_backoff_grows_to_the_bound_and_resets() {
+        let mut backoff = ScoutRecvBackoff::new();
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD);
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD * 2);
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD * 4);
+
+        for _ in 0..10 {
+            backoff.next_delay();
+        }
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_MAX_PERIOD);
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_MAX_PERIOD);
+
+        backoff.reset();
+        assert_eq!(backoff.next_delay(), SCOUT_RECV_ERROR_INITIAL_PERIOD);
+    }
+
+    /// The interface cache is process global, so no two of these tests may run at once.
+    #[cfg(unix)]
+    static INTERFACE_CACHE_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(unix)]
+    fn lock_interface_cache() -> MutexGuard<'static, ()> {
+        INTERFACE_CACHE_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }

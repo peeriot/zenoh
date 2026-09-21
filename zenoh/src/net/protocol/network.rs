@@ -40,7 +40,7 @@ use zenoh_protocol::{
 };
 use zenoh_transport::unicast::TransportUnicast;
 
-use super::linkstate::LinkInfo;
+use super::{advance_self_sn, linkstate::LinkInfo};
 use crate::net::{
     codec::Zenoh080Routing,
     common::AutoConnect,
@@ -237,7 +237,7 @@ impl Network {
             }
         }
 
-        self.graph[self.idx].sn += 1;
+        advance_self_sn(&mut self.graph[self.idx].sn);
         self.send_on_links(
             vec![(
                 self.idx,
@@ -464,6 +464,8 @@ impl Network {
         link_states: Vec<LinkState>,
         src: ZenohIdProto,
     ) -> Vec<LocalLinkState> {
+        let own_node = &self.graph[self.idx];
+        let (own_zid, own_sn) = (own_node.zid, own_node.sn);
         let links = &mut self.links;
         let graph = &self.graph;
 
@@ -527,6 +529,36 @@ impl Network {
 
         link_states
             .into_iter()
+            // A peer has nothing to tell this node about itself, and one that tries
+            // parks the node's own sequence number wherever it likes: from the top of
+            // the space every later announcement of ours is below what the receivers
+            // already hold, and is dropped by all of them for good. The psid mapping
+            // above is kept, because other nodes' link sets name this one by psid.
+            //
+            // Only a sequence number above our own could ever have written the entry -
+            // both receive loops drop anything at or below it as outdated - and one at
+            // or below it is what the graph a peer sends on a fresh link hands back as
+            // a matter of course. So the harmful shape is the only one worth a warning.
+            .filter(|(zid, _, _, sn, ..)| {
+                if *zid != own_zid {
+                    return true;
+                }
+                if *sn > own_sn {
+                    tracing::warn!(
+                        "{} Ignoring the link state {} sent about this node itself",
+                        self.name,
+                        src
+                    );
+                } else {
+                    tracing::debug!(
+                        "{} Ignoring the link state {} sent about this node itself",
+                        self.name,
+                        src
+                    );
+                }
+
+                false
+            })
             .map(|(zid, whatami, locators, sn, links, weights, is_gateway)| {
                 let mut edges = HashMap::with_capacity(links.len());
                 for i in 0..links.len() {
@@ -827,6 +859,25 @@ impl Network {
         }
     }
 
+    /// Pushes the node's own entry, carrying its current locator set, on every link.
+    ///
+    /// The locator set is read at send time, so the caller passes none. No link is
+    /// opened, and no other node's entry is read, sent or changed.
+    pub(crate) fn announce_locators(&mut self) {
+        advance_self_sn(&mut self.graph[self.idx].sn);
+        self.send_on_links(
+            vec![(
+                self.idx,
+                Details {
+                    zid: true,
+                    locators: true,
+                    links: true,
+                },
+            )],
+            |_link| true,
+        );
+    }
+
     pub(crate) fn add_link(&mut self, transport: TransportUnicast) -> LinkId {
         let free_index = {
             let mut i = 0;
@@ -861,7 +912,7 @@ impl Network {
 
             let link_weight = self.get_default_link_weight_to(&zid);
             self.graph[self.idx].links.insert(zid, link_weight);
-            self.graph[self.idx].sn += 1;
+            advance_self_sn(&mut self.graph[self.idx].sn);
 
             if (self.full_linkstate || self.gossip_multihop)
                 && self.graph[idx]
@@ -963,7 +1014,7 @@ impl Network {
             }
             let removed = self.remove_detached_nodes();
 
-            self.graph[self.idx].sn += 1;
+            advance_self_sn(&mut self.graph[self.idx].sn);
 
             self.send_on_links(
                 vec![(

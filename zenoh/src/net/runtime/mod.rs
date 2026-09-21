@@ -18,6 +18,7 @@
 //!
 //! [Click here for Zenoh's documentation](https://docs.rs/zenoh/latest/zenoh)
 mod adminspace;
+pub(crate) mod interface_monitor;
 pub mod orchestrator;
 mod region;
 
@@ -27,6 +28,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::{
     any::Any,
     collections::HashSet,
+    net::SocketAddr,
     ops::Deref,
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -69,7 +71,7 @@ use zenoh_transport::{
     TransportManager, TransportMulticastEventHandler, TransportPeer, TransportPeerEventHandler,
 };
 
-use self::orchestrator::StartConditions;
+use self::{interface_monitor::MonitorCounters, orchestrator::StartConditions};
 use super::{
     primitives::{DeMux, EPrimitives, Primitives},
     routing::{
@@ -118,6 +120,16 @@ impl ShmProviderState {
     }
 }
 
+/// The scout tasks currently running.
+pub(crate) struct ScoutTasks {
+    /// The token the tasks were started under. It is a child of the runtime's own
+    /// token, so the scout tasks can be stopped and started again without touching
+    /// anything else the runtime is doing.
+    pub(crate) token: CancellationToken,
+    /// The addresses the tasks answer on.
+    pub(crate) socket_addrs: Vec<SocketAddr>,
+}
+
 pub(crate) struct RuntimeState {
     zid: ZenohId,
     whatami: WhatAmI,
@@ -129,6 +141,10 @@ pub(crate) struct RuntimeState {
     locators: std::sync::RwLock<Vec<Locator>>,
     hlc: Option<Arc<HLC>>,
     task_controller: TaskController,
+    /// The scout tasks currently running, absent when nothing is scouting.
+    scout_tasks: std::sync::Mutex<Option<ScoutTasks>>,
+    /// The counters of the running interface poll, absent when the poll is off.
+    interface_monitor: std::sync::Mutex<Option<Arc<MonitorCounters>>>,
     #[cfg(feature = "plugins")]
     plugins_manager: Mutex<PluginsManager>,
     start_conditions: Arc<StartConditions>,
@@ -695,6 +711,8 @@ impl RuntimeBuilder {
                 locators: std::sync::RwLock::new(vec![]),
                 hlc,
                 task_controller: TaskController::default(),
+                scout_tasks: std::sync::Mutex::new(None),
+                interface_monitor: std::sync::Mutex::new(None),
                 #[cfg(feature = "plugins")]
                 plugins_manager: Mutex::new(plugins_manager),
                 start_conditions: Arc::new(StartConditions::default()),
@@ -838,6 +856,28 @@ impl Runtime {
 
     pub fn get_cancellation_token(&self) -> CancellationToken {
         self.state.get_cancellation_token()
+    }
+
+    /// The token the running scout tasks were started under, if any are running.
+    pub(crate) fn scout_token(&self) -> Option<CancellationToken> {
+        zlock!(self.state.scout_tasks)
+            .as_ref()
+            .map(|tasks| tasks.token.clone())
+    }
+
+    /// The addresses the running scout tasks answer on.
+    pub(crate) fn scout_socket_addrs(&self) -> Vec<SocketAddr> {
+        zlock!(self.state.scout_tasks)
+            .as_ref()
+            .map(|tasks| tasks.socket_addrs.clone())
+            .unwrap_or_default()
+    }
+
+    /// The counters of the running interface poll, absent when the poll is off.
+    #[cfg(feature = "test")]
+    #[allow(dead_code)]
+    pub(crate) fn interface_monitor(&self) -> Option<Arc<MonitorCounters>> {
+        zlock!(self.state.interface_monitor).clone()
     }
 
     #[cfg(feature = "shared-memory")]

@@ -134,6 +134,9 @@
     timeout: 3000,
     /// In peer mode, the maximum period in milliseconds dedicated to scouting remote peers before attempting other operations.
     delay: 500,
+    /// How often, in milliseconds, the host interface list is polled so that a node that changed
+    /// address re-advertises it. Set to 0 to turn the poll off.
+    interface_poll_interval: 10000,
     /// The multicast scouting configuration.
     multicast: {
       /// Whether multicast scouting is enabled or not
