@@ -42,7 +42,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "net", "sync"] }
 tokio-rustls = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-webpki-roots = { workspace = true }
 x509-parser = { workspace = true }
 zenoh-config = { workspace = true }
 zenoh-core = { workspace = true }
