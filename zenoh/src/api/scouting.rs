@@ -169,6 +169,7 @@ pub(crate) fn _scout(
         |s| s.as_ref(),
     );
     let ifaces = Runtime::get_interfaces(ifaces);
+    let tag = *config.0.scouting.multicast.tag();
     if !ifaces.is_empty() {
         let sockets = ifaces
             .into_iter()
@@ -180,7 +181,7 @@ pub(crate) fn _scout(
             let task = TerminatableTask::spawn(
                 zenoh_runtime::ZRuntime::Acceptor,
                 async move {
-                    let scout = Runtime::scout(&sockets, what, &addr, move |hello| {
+                    let scout = Runtime::scout(&sockets, what, &addr, tag, move |hello| {
                         let callback = callback.clone();
                         async move {
                             callback.call(hello.into());

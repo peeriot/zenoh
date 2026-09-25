@@ -174,6 +174,11 @@
       autoconnect_strategy: { peer: { to_router: "always", to_peer: "always" } },
       /// Whether or not to listen for scout messages on UDP multicast and reply to them.
       listen: { router: true, peer: true, client: true },
+      /// The scouting tag: 32 hexadecimal digits or a UUID (e.g. tag: "01234567-89ab-cdef-0123-456789abcdef").
+      /// When set, this instance answers only Scouts carrying the same tag, acts only on Hellos carrying it,
+      /// and puts it into its own Scouts and Hellos. When unset, scouting is unrestricted.
+      /// Instances without tag support ignore the tag on the wire.
+      tag: null,
     },
     /// The gossip scouting configuration. Note that instances in "client" mode do not participate in gossip.
     gossip: {

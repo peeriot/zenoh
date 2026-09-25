@@ -72,6 +72,9 @@ use zenoh_util::{LibLoader, LibSearchDirs};
 pub mod mode_dependent;
 pub use mode_dependent::*;
 
+pub mod scouting_tag;
+pub use scouting_tag::ScoutingTag;
+
 pub mod connection_retry;
 pub use connection_retry::*;
 
@@ -622,6 +625,10 @@ validated_struct::validator! {
                 autoconnect_strategy: Option<ModeDependentValue<TargetDependentValue<AutoConnectStrategy>>>,
                 /// Whether or not to listen for scout messages on UDP multicast and reply to them.
                 listen: Option<ModeDependentValue<bool>>,
+                /// The scouting tag: 32 hexadecimal digits or a UUID. When set, this node answers only
+                /// Scouts carrying the same tag, acts only on Hellos carrying it, and puts it into its own
+                /// Scouts and Hellos. When unset, scouting is unrestricted.
+                tag: Option<ScoutingTag>,
             },
             /// The gossip scouting configuration.
             pub gossip: #[derive(Default)]
@@ -1634,6 +1641,30 @@ impl std::fmt::Display for Config {
                 fmt::Error
             })?
     }
+}
+
+#[test]
+fn a_scouting_tag_is_read_from_the_config_in_either_form() {
+    const HEX: &str = "0123456789abcdef0123456789abcdef";
+    const UUID: &str = "01234567-89ab-cdef-0123-456789abcdef";
+    let from_str = serde_json::Deserializer::from_str;
+
+    let unset = Config::from_deserializer(&mut from_str(r#"{}"#)).unwrap();
+    assert_eq!(*unset.scouting().multicast().tag(), None);
+
+    let mut config = Config::default();
+    config
+        .insert_json5("scouting/multicast/tag", &format!("\"{UUID}\""))
+        .unwrap();
+    let tag = config.scouting().multicast().tag().unwrap();
+    assert_eq!(tag, HEX.parse::<ScoutingTag>().unwrap());
+    assert_eq!(
+        config.get_json("scouting/multicast/tag").unwrap(),
+        format!("\"{HEX}\"")
+    );
+    assert!(config
+        .insert_json5("scouting/multicast/tag", "\"not a tag\"")
+        .is_err());
 }
 
 #[test]
