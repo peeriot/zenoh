@@ -97,6 +97,29 @@ pub trait LinkUnicastTrait: Send + Sync {
     fn get_fd(&self) -> ZResult<RawFd>;
 }
 
+/// Which end of a link this node is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkSide {
+    Connect,
+    Accept,
+}
+
+/// Authenticates each new `tls/` link after its handshake and before zenoh
+/// writes or reads its first byte. zenoh uses the link on `Ok` and drops it on
+/// `Err`. An authenticator bounds its own time and reads only the bytes its
+/// peer wrote for it.
+#[async_trait]
+pub trait LinkAuthenticator: Send + Sync {
+    /// `peer_certificates` is the chain the handshake verified, DER, leaf
+    /// first; it is empty when the peer presented none.
+    async fn authenticate(
+        &self,
+        link: &LinkUnicast,
+        peer_certificates: &[Vec<u8>],
+        side: LinkSide,
+    ) -> ZResult<()>;
+}
+
 impl Deref for LinkUnicast {
     type Target = Arc<dyn LinkUnicastTrait>;
 
