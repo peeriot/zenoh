@@ -187,10 +187,20 @@ pub mod expiration {
         }
 
         /// Waits for expiration task to complete, returning its return value.
+        /// A later call returns at once: a link can be closed twice.
         pub async fn wait_for_expiration_task(&self) -> ZResult<()> {
-            let mut lock = self.handle.lock().await;
-            let handle = lock.take().expect("handle should be set");
-            handle.await?
+            match self.handle.lock().await.take() {
+                Some(handle) => handle.await?,
+                None => Ok(()),
+            }
+        }
+    }
+
+    impl Drop for LinkCertExpirationManager {
+        /// The expiration task of a dropped link ends. It would otherwise wake
+        /// every few minutes until the peer's certificate expires.
+        fn drop(&mut self) {
+            self.token.cancel();
         }
     }
 
@@ -240,5 +250,77 @@ pub mod expiration {
             let sleep_duration = tokio::time::Duration::min(MAX_SLEEP_DURATION, wakeup_duration);
             tokio::time::sleep(sleep_duration).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        sync::Arc,
+        time::Duration,
+    };
+
+    use async_trait::async_trait;
+    use time::OffsetDateTime;
+    use zenoh_result::ZResult;
+    use zenoh_runtime::ZRuntime;
+
+    use super::expiration::{LinkCertExpirationManager, LinkWithCertExpiration};
+
+    /// A certificate expiry the tests never reach.
+    const FAR_EXPIRY: time::Duration = time::Duration::days(365);
+    /// How long a test waits for the expiration task to end: far below the
+    /// task's own sleep between wakeups.
+    const TASK_END_BOUND: Duration = Duration::from_secs(5);
+    const POLL: Duration = Duration::from_millis(10);
+
+    /// A link that nothing expires in these tests.
+    struct Link;
+
+    #[async_trait]
+    impl LinkWithCertExpiration for Link {
+        async fn expire(&self) -> ZResult<()> {
+            Ok(())
+        }
+    }
+
+    fn manager(link: &Arc<dyn LinkWithCertExpiration>) -> LinkCertExpirationManager {
+        // The addresses only name the link in log lines.
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        LinkCertExpirationManager::new(
+            Arc::downgrade(link),
+            addr,
+            addr,
+            "tls",
+            OffsetDateTime::now_utc() + FAR_EXPIRY,
+        )
+    }
+
+    #[test]
+    fn expiry_task_ends_when_manager_dropped() {
+        let link: Arc<dyn LinkWithCertExpiration> = Arc::new(Link);
+        drop(manager(&link));
+        // The task holds the link's one weak reference until it ends.
+        let ended = ZRuntime::Application.block_on(async {
+            tokio::time::timeout(TASK_END_BOUND, async {
+                while Arc::weak_count(&link) > 0 {
+                    tokio::time::sleep(POLL).await;
+                }
+            })
+            .await
+        });
+        assert!(ended.is_ok(), "the expiration task outlives its manager");
+    }
+
+    #[test]
+    fn expiry_wait_twice_returns() {
+        let link: Arc<dyn LinkWithCertExpiration> = Arc::new(Link);
+        let manager = manager(&link);
+        manager.cancel_expiration_task();
+        ZRuntime::Application.block_on(async {
+            manager.wait_for_expiration_task().await.unwrap();
+            manager.wait_for_expiration_task().await.unwrap();
+        });
     }
 }
