@@ -158,6 +158,23 @@ impl LinkUnicastTls {
         unsafe { &mut *self.inner.get() }
     }
 
+    /// Mark a link the authenticator refused: with a zero linger its drop
+    /// resets the connection at once. Otherwise the drop waits up to
+    /// `TLS_LINGER_TIMEOUT` on the worker that drops it, for a peer that stops
+    /// reading to acknowledge what is unsent. Nothing unsent matters here.
+    fn refuse(&self) {
+        let (tcp_stream, _) = self.get_mut_socket().get_ref();
+        // Deprecated for the blocking close a positive linger brings.
+        #[allow(deprecated)]
+        if let Err(err) = tcp_stream.set_linger(Some(Duration::ZERO)) {
+            tracing::warn!(
+                "Unable to reset LINGER on refused TLS link {}: {}",
+                self,
+                err
+            );
+        }
+    }
+
     async fn close(&self) -> ZResult<()> {
         tracing::trace!("Closing TLS link: {}", self);
         // Flush the TLS stream
@@ -421,12 +438,14 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
             )
         });
 
+        let tls = link.clone();
         let link = LinkUnicast(link);
         if let Some(authenticator) = &self.authenticator {
             if let Err(e) = authenticator
                 .authenticate(&link, &peer_certificates, LinkSide::Connect)
                 .await
             {
+                tls.refuse();
                 bail!("TLS link {link} refused: {e}");
             }
         }
@@ -607,20 +626,24 @@ async fn accept_task(
                             )
                         });
 
-                        let link = LinkUnicast(link);
                         match &authenticator {
-                            None => forward(&manager, link).await,
+                            None => forward(&manager, LinkUnicast(link)).await,
                             // A task per link: a slow authentication holds up
                             // no other handshake or accept.
                             Some(authenticator) => {
                                 let (authenticator, manager) = (authenticator.clone(), manager.clone());
                                 zenoh_runtime::ZRuntime::Acceptor.spawn(async move {
+                                    let tls = link.clone();
+                                    let link = LinkUnicast(link);
                                     match authenticator
                                         .authenticate(&link, &peer_certificates, LinkSide::Accept)
                                         .await
                                     {
                                         Ok(()) => forward(&manager, link).await,
-                                        Err(e) => tracing::debug!("TLS link {link} refused: {e}"),
+                                        Err(e) => {
+                                            tracing::debug!("TLS link {link} refused: {e}");
+                                            tls.refuse();
+                                        }
                                     }
                                 });
                             }

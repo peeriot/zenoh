@@ -3558,4 +3558,82 @@ mod link_authenticator {
         ztimeout!(second.close());
         ztimeout!(router.close());
     }
+
+    /// A write that stalls this long has filled every buffer between the
+    /// listener and a peer that stops reading.
+    const FILL_STALL: Duration = Duration::from_millis(200);
+    const FILL_CHUNK: usize = 64 * 1024;
+    /// The refused peer's receive buffer: small, so the buffers fill fast.
+    const LINGER_RCVBUF: &str = "4096";
+    /// Well below `TLS_LINGER_TIMEOUT` (10 s), the time a lingering close of a
+    /// refused link would hold the accept worker.
+    const LINGER_STALL_BOUND: Duration = Duration::from_secs(2);
+
+    /// Fills the first link until its peer's buffers are full, then refuses
+    /// it, with bytes left unsent; admits every later link.
+    #[derive(Default)]
+    struct FillThenRefuse {
+        seen: AtomicUsize,
+        refused: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl LinkAuthenticator for FillThenRefuse {
+        async fn authenticate(
+            &self,
+            link: &LinkUnicast,
+            _: &[Vec<u8>],
+            _: LinkSide,
+        ) -> ZResult<()> {
+            if self.seen.fetch_add(1, Ordering::SeqCst) > 0 {
+                return Ok(());
+            }
+            let chunk = vec![0; FILL_CHUNK];
+            while let Ok(Ok(())) = tokio::time::timeout(FILL_STALL, link.write_all(&chunk)).await {}
+            self.refused.notify_one();
+            bail!("refused with bytes unsent")
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn refused_link_does_not_linger() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10475);
+        let fill = Arc::new(FillThenRefuse::default());
+        let router = router(
+            &server_endpoint,
+            Arc::new(SHRouter::default()),
+            Some(fill.clone()),
+        )
+        .await;
+
+        // The first client holds its link and reads nothing.
+        let mut unread = client_endpoint.clone();
+        unread
+            .config_mut()
+            .extend_from_iter(
+                [(zenoh_link_commons::TCP_SO_RCV_BUF, LINGER_RCVBUF)]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        let held = client(CLIENT_ZID, Some(Arc::new(HoldFirst::default())));
+        let held_open =
+            tokio::spawn(async move { held.open_transport_unicast(unread).await.map(|_| ()) });
+        ztimeout!(fill.refused.notified());
+
+        let second = client(SECOND_CLIENT_ZID, None);
+        let opened = tokio::time::timeout(
+            LINGER_STALL_BOUND,
+            second.open_transport_unicast(client_endpoint),
+        )
+        .await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "the close of a refused link held up the next accept"
+        );
+        held_open.abort();
+        ztimeout!(second.close());
+        ztimeout!(router.close());
+    }
 }
