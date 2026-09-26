@@ -110,8 +110,9 @@ pub enum LinkSide {
 /// peer wrote for it.
 #[async_trait]
 pub trait LinkAuthenticator: Send + Sync {
-    /// `peer_certificates` is the chain the handshake verified, DER, leaf
-    /// first; it is empty when the peer presented none.
+    /// `peer_certificates` is the chain the peer presented, DER, leaf first:
+    /// the handshake verified the leaf, and the rest is as the peer sent it.
+    /// It is empty when the peer presented none.
     async fn authenticate(
         &self,
         link: &LinkUnicast,

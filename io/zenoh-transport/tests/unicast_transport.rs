@@ -3335,10 +3335,19 @@ mod link_authenticator {
     const SECOND_CLIENT_ZID: u8 = 3;
 
     /// Writes its token to the peer and reads the peer's, the connector first,
-    /// and admits the link when the peer's token is `peer`.
+    /// and admits the link when the peer's token is `peer` and its leaf
+    /// `peer_leaf`.
     struct Tokens {
         mine: [u8; TOKEN_LEN],
         peer: [u8; TOKEN_LEN],
+        peer_leaf: Vec<u8>,
+    }
+
+    /// The DER of the one certificate in `pem`.
+    fn der(pem: &str) -> Vec<u8> {
+        let mut reader = pem.as_bytes();
+        let mut certificates = rustls_pemfile::certs(&mut reader);
+        certificates.next().unwrap().unwrap().to_vec()
     }
 
     impl Tokens {
@@ -3360,8 +3369,8 @@ mod link_authenticator {
             peer_certificates: &[Vec<u8>],
             side: LinkSide,
         ) -> ZResult<()> {
-            if peer_certificates.is_empty() {
-                bail!("the peer presented no certificate");
+            if peer_certificates.first() != Some(&self.peer_leaf) {
+                bail!("the leaf is not the peer's certificate");
             }
             match side {
                 LinkSide::Connect => {
@@ -3472,11 +3481,13 @@ mod link_authenticator {
         let acceptor = Tokens {
             mine: ACCEPTOR_TOKEN,
             peer: CONNECTOR_TOKEN,
+            peer_leaf: der(CLIENT_CERT),
         };
         let router = router(&server_endpoint, handler.clone(), Some(Arc::new(acceptor))).await;
         let connector = Tokens {
             mine: CONNECTOR_TOKEN,
             peer: ACCEPTOR_TOKEN,
+            peer_leaf: der(SERVER_CERT),
         };
         let client = client(CLIENT_ZID, Some(Arc::new(connector)));
 
@@ -3570,7 +3581,9 @@ mod link_authenticator {
     const LINGER_STALL_BOUND: Duration = Duration::from_secs(2);
 
     /// Fills the first link until its peer's buffers are full, then refuses
-    /// it, with bytes left unsent; admits every later link.
+    /// it, with bytes left unsent; admits every later link. A connector first
+    /// reads what the acceptor sent after the handshake, TLS 1.3's session
+    /// tickets: a close with bytes unread resets at once, and lingers not.
     #[derive(Default)]
     struct FillThenRefuse {
         seen: AtomicUsize,
@@ -3583,10 +3596,13 @@ mod link_authenticator {
             &self,
             link: &LinkUnicast,
             _: &[Vec<u8>],
-            _: LinkSide,
+            side: LinkSide,
         ) -> ZResult<()> {
             if self.seen.fetch_add(1, Ordering::SeqCst) > 0 {
                 return Ok(());
+            }
+            if side == LinkSide::Connect {
+                let _ = tokio::time::timeout(FILL_STALL, link.read(&mut [0; 1])).await;
             }
             let chunk = vec![0; FILL_CHUNK];
             while let Ok(Ok(())) = tokio::time::timeout(FILL_STALL, link.write_all(&chunk)).await {}
@@ -3634,6 +3650,52 @@ mod link_authenticator {
         );
         held_open.abort();
         ztimeout!(second.close());
+        ztimeout!(router.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn refused_connect_does_not_linger() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10476);
+        // The listener holds its link and reads nothing.
+        let mut unread = server_endpoint;
+        unread
+            .config_mut()
+            .extend_from_iter(
+                [(zenoh_link_commons::TCP_SO_RCV_BUF, LINGER_RCVBUF)]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        let router = router(
+            &unread,
+            Arc::new(SHRouter::default()),
+            Some(Arc::new(HoldFirst::default())),
+        )
+        .await;
+        let fill = Arc::new(FillThenRefuse::default());
+        let client = Arc::new(client(CLIENT_ZID, Some(fill.clone())));
+        let open = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .open_transport_unicast(client_endpoint)
+                    .await
+                    .map(|_| ())
+            }
+        });
+        ztimeout!(fill.refused.notified());
+
+        // The open ends with the refusal: a lingering close would hold it,
+        // and the worker under tokio's timers with it. The clock is the
+        // system's.
+        let refused = std::time::Instant::now();
+        assert!(ztimeout!(open).unwrap().is_err());
+        assert!(
+            refused.elapsed() < LINGER_STALL_BOUND,
+            "the close of a refused link held up its open"
+        );
+        ztimeout!(client.close());
         ztimeout!(router.close());
     }
 }
