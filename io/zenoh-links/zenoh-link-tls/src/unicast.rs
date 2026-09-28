@@ -649,6 +649,11 @@ async fn accept_task(
                             }
                         }
                     }
+                    // One peer's failed handshake: the next accept waits for nothing.
+                    Err(e @ (tls_listener::Error::TlsAcceptError { .. }
+                    | tls_listener::Error::HandshakeTimeout { .. })) => {
+                        tracing::warn!("TLS handshake failed: {e}");
+                    }
                     Err(e) => {
                         tracing::warn!("{}. Hint: increase the system open file limit.", e);
                         // Throttle the accept loop upon an error
