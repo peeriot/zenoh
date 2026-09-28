@@ -182,6 +182,7 @@ impl Reader for &[u8] {
     }
 
     fn read_zslice(&mut self, len: usize) -> Result<ZSlice, DidntRead> {
+        // A length above what is left sizes no allocation.
         if self.len() < len {
             return Err(DidntRead);
         }
