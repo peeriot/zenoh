@@ -3580,14 +3580,16 @@ mod link_authenticator {
     /// refused link would hold the accept worker.
     const LINGER_STALL_BOUND: Duration = Duration::from_secs(2);
 
-    /// Fills the first link until its peer's buffers are full, then refuses
-    /// it, with bytes left unsent; admits every later link. A connector first
-    /// reads what the acceptor sent after the handshake, TLS 1.3's session
-    /// tickets: a close with bytes unread resets at once, and lingers not.
+    /// Fills the first link until its peer's buffers are full, with bytes left
+    /// unsent, then refuses it, or holds it for good when `hold`; admits every
+    /// later link. A connector first reads what the acceptor sent after the
+    /// handshake, TLS 1.3's session tickets: a close with bytes unread resets
+    /// at once, and lingers not.
     #[derive(Default)]
     struct FillThenRefuse {
         seen: AtomicUsize,
-        refused: tokio::sync::Notify,
+        filled: tokio::sync::Notify,
+        hold: bool,
     }
 
     #[async_trait]
@@ -3606,9 +3608,31 @@ mod link_authenticator {
             }
             let chunk = vec![0; FILL_CHUNK];
             while let Ok(Ok(())) = tokio::time::timeout(FILL_STALL, link.write_all(&chunk)).await {}
-            self.refused.notify_one();
+            self.filled.notify_one();
+            if self.hold {
+                std::future::pending::<()>().await;
+            }
             bail!("refused with bytes unsent")
         }
+    }
+
+    /// A listener that holds its links and reads nothing, on `server`.
+    async fn unread_router(server: EndPoint) -> TransportManager {
+        let mut unread = server;
+        unread
+            .config_mut()
+            .extend_from_iter(
+                [(zenoh_link_commons::TCP_SO_RCV_BUF, LINGER_RCVBUF)]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        router(
+            &unread,
+            Arc::new(SHRouter::default()),
+            Some(Arc::new(HoldFirst::default())),
+        )
+        .await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3636,7 +3660,7 @@ mod link_authenticator {
         let held = client(CLIENT_ZID, Some(Arc::new(HoldFirst::default())));
         let held_open =
             tokio::spawn(async move { held.open_transport_unicast(unread).await.map(|_| ()) });
-        ztimeout!(fill.refused.notified());
+        ztimeout!(fill.filled.notified());
 
         let second = client(SECOND_CLIENT_ZID, None);
         let opened = tokio::time::timeout(
@@ -3657,22 +3681,7 @@ mod link_authenticator {
     async fn refused_connect_does_not_linger() {
         zenoh_util::init_log_from_env_or("error");
         let (client_endpoint, server_endpoint) = endpoints(10476);
-        // The listener holds its link and reads nothing.
-        let mut unread = server_endpoint;
-        unread
-            .config_mut()
-            .extend_from_iter(
-                [(zenoh_link_commons::TCP_SO_RCV_BUF, LINGER_RCVBUF)]
-                    .iter()
-                    .copied(),
-            )
-            .unwrap();
-        let router = router(
-            &unread,
-            Arc::new(SHRouter::default()),
-            Some(Arc::new(HoldFirst::default())),
-        )
-        .await;
+        let router = unread_router(server_endpoint).await;
         let fill = Arc::new(FillThenRefuse::default());
         let client = Arc::new(client(CLIENT_ZID, Some(fill.clone())));
         let open = tokio::spawn({
@@ -3684,7 +3693,7 @@ mod link_authenticator {
                     .map(|_| ())
             }
         });
-        ztimeout!(fill.refused.notified());
+        ztimeout!(fill.filled.notified());
 
         // The open ends with the refusal: a lingering close would hold it,
         // and the worker under tokio's timers with it. The clock is the
@@ -3694,6 +3703,38 @@ mod link_authenticator {
         assert!(
             refused.elapsed() < LINGER_STALL_BOUND,
             "the close of a refused link held up its open"
+        );
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_connect_does_not_linger() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10477);
+        let router = unread_router(server_endpoint).await;
+        let fill = Arc::new(FillThenRefuse {
+            hold: true,
+            ..Default::default()
+        });
+        let client = client(CLIENT_ZID, Some(fill.clone()));
+        // Boxed: dropping it drops the open itself.
+        let mut open = Box::pin(client.open_transport_unicast(client_endpoint));
+        ztimeout!(async {
+            tokio::select! {
+                _ = &mut open => panic!("the open ended before its verdict"),
+                () = fill.filled.notified() => {}
+            }
+        });
+
+        // Dropped before a verdict, as zenoh's open timeout drops it: the link
+        // goes with bytes unsent, and a lingering close would hold this
+        // thread. The clock is the system's.
+        let cancelled = std::time::Instant::now();
+        drop(open);
+        assert!(
+            cancelled.elapsed() < LINGER_STALL_BOUND,
+            "the close of a cancelled link lingered"
         );
         ztimeout!(client.close());
         ztimeout!(router.close());

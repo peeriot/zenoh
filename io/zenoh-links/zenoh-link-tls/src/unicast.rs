@@ -300,6 +300,25 @@ impl LinkWithCertExpiration for LinkUnicastTls {
     }
 }
 
+/// Resets a link when dropped before its authenticator admitted it: on a
+/// refusal, and when the caller cancels the authentication, as zenoh's open
+/// timeout does.
+struct ResetUnlessAdmitted(Option<Arc<LinkUnicastTls>>);
+
+impl ResetUnlessAdmitted {
+    fn admitted(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ResetUnlessAdmitted {
+    fn drop(&mut self) {
+        if let Some(link) = self.0.take() {
+            link.refuse();
+        }
+    }
+}
+
 impl Drop for LinkUnicastTls {
     fn drop(&mut self) {
         // Close the underlying TCP stream
@@ -441,13 +460,14 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
         let tls = link.clone();
         let link = LinkUnicast(link);
         if let Some(authenticator) = &self.authenticator {
-            if let Err(e) = authenticator
+            // A refusal resets the link, and so does the open timeout that
+            // cancels this future before a verdict.
+            let pending = ResetUnlessAdmitted(Some(tls));
+            authenticator
                 .authenticate(&link, &peer_certificates, LinkSide::Connect)
                 .await
-            {
-                tls.refuse();
-                bail!("TLS link {link} refused: {e}");
-            }
+                .map_err(|e| zerror!("TLS link {link} refused: {e}"))?;
+            pending.admitted();
         }
         Ok(link)
     }
@@ -633,17 +653,17 @@ async fn accept_task(
                             Some(authenticator) => {
                                 let (authenticator, manager) = (authenticator.clone(), manager.clone());
                                 zenoh_runtime::ZRuntime::Acceptor.spawn(async move {
-                                    let tls = link.clone();
+                                    let pending = ResetUnlessAdmitted(Some(link.clone()));
                                     let link = LinkUnicast(link);
                                     match authenticator
                                         .authenticate(&link, &peer_certificates, LinkSide::Accept)
                                         .await
                                     {
-                                        Ok(()) => forward(&manager, link).await,
-                                        Err(e) => {
-                                            tracing::debug!("TLS link {link} refused: {e}");
-                                            tls.refuse();
+                                        Ok(()) => {
+                                            pending.admitted();
+                                            forward(&manager, link).await;
                                         }
+                                        Err(e) => tracing::debug!("TLS link {link} refused: {e}"),
                                     }
                                 });
                             }
