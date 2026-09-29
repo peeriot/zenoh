@@ -1216,11 +1216,11 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
         match zread!(self.runtime).upgrade().as_ref() {
             Some(runtime) => {
                 let _span = runtime.state.span.enter();
-                let slave_handlers: Vec<Arc<dyn TransportMulticastEventHandler>> =
-                    zread!(runtime.state.transport_handlers)
-                        .iter()
-                        .filter_map(|handler| handler.new_multicast(transport.clone()).ok())
-                        .collect();
+                // A handler's refusal refuses the transport.
+                let slave_handlers = zread!(runtime.state.transport_handlers)
+                    .iter()
+                    .map(|handler| handler.new_multicast(transport.clone()))
+                    .collect::<ZResult<Vec<Arc<dyn TransportMulticastEventHandler>>>>()?;
 
                 let region = region::compute_multicast_region(&runtime.config().lock())?;
 
