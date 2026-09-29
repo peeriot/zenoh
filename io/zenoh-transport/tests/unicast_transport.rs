@@ -3314,10 +3314,13 @@ async fn transport_unicast_close_link_lowlatency() {
     ztimeout!(router_manager.close());
     ztimeout!(client_manager.close());
 /// The link authenticator hook on `tls/` links: it runs before the transport's
-/// first byte, on both sides, and a refusal leaves no transport.
+/// first byte, on both sides, and a refusal leaves no transport. The TLS accept
+/// loop these links come through takes its next connection at once after a
+/// failed handshake.
 #[cfg(all(feature = "transport_tls", target_family = "unix"))]
 mod link_authenticator {
     use async_trait::async_trait;
+    use tokio::io::AsyncWriteExt;
     use zenoh_link::{LinkAuthenticator, LinkSide, LinkUnicast};
     use zenoh_link_commons::tls::config::*;
     use zenoh_result::bail;
@@ -3736,6 +3739,83 @@ mod link_authenticator {
             cancelled.elapsed() < LINGER_STALL_BOUND,
             "the close of a cancelled link lingered"
         );
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
+
+    /// zenoh-link-tls's `TLS_ACCEPT_THROTTLE_TIME`: the pause a listener error
+    /// takes.
+    const ACCEPT_THROTTLE: Duration = Duration::from_millis(100);
+    /// Handshakes that fail ahead of a client's open. Paused each, they would
+    /// hold the accept loop twice `BURST_BOUND`.
+    const FAILED_HANDSHAKES: u32 = 50;
+    /// How long a client's open may take after the failed handshakes.
+    const BURST_BOUND: Duration = ACCEPT_THROTTLE.saturating_mul(FAILED_HANDSHAKES / 2);
+    /// A first TLS record no handshake accepts.
+    const NOT_TLS: &[u8] = b"not a TLS record";
+    /// The listener's handshake timeout: silent peers time out within the
+    /// test.
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// `FAILED_HANDSHAKES` TCP connections to `server`'s listener, none of
+    /// which has sent a byte.
+    async fn tcp_connections(server: &EndPoint) -> Vec<tokio::net::TcpStream> {
+        let mut connections = Vec::new();
+        for _ in 0..FAILED_HANDSHAKES {
+            let connection = tokio::net::TcpStream::connect(server.address().as_str());
+            connections.push(ztimeout!(connection).unwrap());
+        }
+        connections
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_handshakes_do_not_pause_accepts() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10478);
+        let router = router(&server_endpoint, Arc::new(SHRouter::default()), None).await;
+        let mut failed = tcp_connections(&server_endpoint).await;
+        for connection in &mut failed {
+            ztimeout!(connection.write_all(NOT_TLS)).unwrap();
+        }
+
+        let client = client(CLIENT_ZID, None);
+        let opened =
+            tokio::time::timeout(BURST_BOUND, client.open_transport_unicast(client_endpoint)).await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "failed handshakes paused the accept loop"
+        );
+        drop(failed);
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn timed_out_handshakes_do_not_pause_accepts() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, mut server_endpoint) = endpoints(10479);
+        let timeout = HANDSHAKE_TIMEOUT.as_millis().to_string();
+        server_endpoint
+            .config_mut()
+            .extend_from_iter(
+                [(TLS_HANDSHAKE_TIMEOUT_MS, timeout.as_str())]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        let router = router(&server_endpoint, Arc::new(SHRouter::default()), None).await;
+        // Silent until each handshake has timed out.
+        let silent = tcp_connections(&server_endpoint).await;
+        tokio::time::sleep(HANDSHAKE_TIMEOUT).await;
+
+        let client = client(CLIENT_ZID, None);
+        let opened =
+            tokio::time::timeout(BURST_BOUND, client.open_transport_unicast(client_endpoint)).await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "timed-out handshakes paused the accept loop"
+        );
+        drop(silent);
         ztimeout!(client.close());
         ztimeout!(router.close());
     }
