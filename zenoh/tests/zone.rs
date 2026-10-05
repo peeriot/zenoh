@@ -44,6 +44,15 @@ fn dials_from(from: &zenoh::session::ZenohId) -> usize {
         .count()
 }
 
+/// Whether some member has joined the zone topic `topic`.
+fn joined(topic: &str) -> bool {
+    let needle = format!("Joined zone {topic} ");
+    STORAGE
+        .lock()
+        .all_events()
+        .any(|e| e.message().is_some_and(|m| m.contains(&needle)))
+}
+
 /// A config that only talks iroh: no multicast/gossip, no TCP listener, no relays.
 pub fn zone_config(zone: &str, lighthouse: &str, mode: WhatAmI, id: Option<&str>) -> Config {
     let mut c = Config::default();
@@ -229,6 +238,57 @@ async fn client_in_a_zone_connects_to_a_peer() {
     assert_pubsub(&c, &p).await;
     c.close().await.unwrap();
     p.close().await.unwrap();
+    server.shutdown().await.unwrap();
+}
+
+/// A zone client that also has an explicit connect endpoint keeps a single transport: the zone
+/// starts after the explicit connect, and its round idles because a transport exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn zone_client_with_explicit_connect_keeps_one_transport() {
+    init_tracing();
+    let (server, url) = lighthouse().await;
+    // A topic of its own, so the "Joined zone" event below is this member's.
+    let zone = format!(
+        r#"{{ id: "zx", topic: "zone/explicit-connect", lighthouse: "{url}", relays: false }}"#
+    );
+    let mut mc = zone_config("zx", &url, WhatAmI::Peer, None);
+    mc.insert_json5("zone", &zone).unwrap();
+    let member = zenoh::open(mc).await.unwrap();
+    let mut tc = Config::default();
+    tc.set_mode(Some(WhatAmI::Peer)).unwrap();
+    tc.insert_json5("scouting/multicast/enabled", "false")
+        .unwrap();
+    tc.insert_json5("scouting/gossip/enabled", "false").unwrap();
+    tc.insert_json5("listen/endpoints", r#"["tcp/127.0.0.1:0"]"#)
+        .unwrap();
+    let tcp_peer = zenoh::open(tc).await.unwrap();
+    let tcp_locator = tcp_peer
+        .info()
+        .locators()
+        .await
+        .into_iter()
+        .find(|l| l.protocol().as_str() == "tcp")
+        .unwrap();
+    wait_until("the member has joined", async || {
+        joined("zone/explicit-connect")
+    })
+    .await;
+    let mut cc = zone_config("zx", &url, WhatAmI::Client, None);
+    cc.insert_json5("zone", &zone).unwrap();
+    cc.insert_json5("connect/endpoints", &format!(r#"["{tcp_locator}"]"#))
+        .unwrap();
+    let c = zenoh::open(cc).await.unwrap();
+    assert!(connected(&c, &tcp_peer).await);
+    // The zone's first round runs right after open; give it time to look up and dial.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let zids: Vec<_> = c.info().transports().await.map(|t| *t.zid()).collect();
+    assert_eq!(zids, vec![tcp_peer.zid()], "a client keeps one transport");
+    // The runtime also rejects a second north-bound client transport, which would hide a racing
+    // zone dial above; so check the zone did not dial at all.
+    assert_eq!(dials_from(&c.zid()), 0, "the zone round must idle");
+    c.close().await.unwrap();
+    tcp_peer.close().await.unwrap();
+    member.close().await.unwrap();
     server.shutdown().await.unwrap();
 }
 

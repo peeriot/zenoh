@@ -25,7 +25,7 @@ use zenoh_core::zlock;
 use zenoh_link::iroh::{
     iroh::{EndpointId, Watcher},
     iroh_lighthouse_client::{parse_url, protocol::Peer, Lighthouse, Topic},
-    locator_of, IrohEndpoint,
+    locator_of, IrohEndpoint, IROH_LOCATOR_PREFIX,
 };
 use zenoh_protocol::core::WhatAmI;
 
@@ -75,6 +75,36 @@ pub(crate) fn start(runtime: &Runtime) {
             discovery.run_member(token).await
         }
     });
+}
+
+/// A client keeps at most one unicast transport. When a zone dial raced another connect path and
+/// both won, close the zone-opened (`iroh/<id>` destination) transports until one remains, so the
+/// pre-existing transport is kept.
+pub(crate) async fn close_extra_zone_transports(runtime: &Runtime) {
+    let transports = runtime.manager().get_transports_unicast().await;
+    let mut remaining = transports.len();
+    for t in transports {
+        if remaining <= 1 {
+            return;
+        }
+        let zone_opened = t.get_links().is_ok_and(|links| {
+            !links.is_empty()
+                && links
+                    .iter()
+                    .all(|l| l.dst.protocol().as_str() == IROH_LOCATOR_PREFIX)
+        });
+        if !zone_opened {
+            continue;
+        }
+        tracing::debug!(
+            "Closing the extra zone transport to {:?}: a client keeps one transport",
+            t.get_zid()
+        );
+        if let Err(e) = t.close().await {
+            tracing::debug!("Cannot close the extra zone transport: {e}");
+        }
+        remaining -= 1;
+    }
 }
 
 #[derive(Clone)]
@@ -178,12 +208,17 @@ impl Discovery {
             }
         };
         for peer in peers {
+            // Another connect path (explicit endpoint, multicast) may have won meanwhile.
+            if !manager.get_transports_unicast().await.is_empty() {
+                return;
+            }
             let id = peer.addr.id;
             self.iroh.set_addr(peer.addr);
             tracing::debug!("zone dial from {} to {id}", self.runtime.zid());
             match manager.open_transport_unicast(locator_of(&id).into()).await {
                 Ok(_) => {
                     tracing::debug!("Connected to zone peer {id}");
+                    close_extra_zone_transports(&self.runtime).await;
                     return;
                 }
                 Err(e) => tracing::debug!("Cannot connect to zone peer {id}: {e}"),

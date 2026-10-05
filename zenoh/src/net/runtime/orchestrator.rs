@@ -229,9 +229,11 @@ impl Runtime {
         let zone_set = self.config().lock().zone().is_some();
         #[cfg(not(feature = "transport_iroh"))]
         let zone_set = false;
-        // Before any scouting, so the zone races multicast instead of waiting behind it.
+        // Without explicit connect endpoints, start before any scouting, so the zone races
+        // multicast instead of waiting behind it. With them, start after the explicit connect,
+        // so the zone's round sees that transport and idles: a client keeps one transport.
         #[cfg(feature = "transport_iroh")]
-        if zone_set {
+        if zone_set && peers.is_empty() {
             super::zone::start(self);
         }
 
@@ -259,9 +261,25 @@ impl Runtime {
                                 // Either multicast or the zone may find someone first. A scouting
                                 // timeout is not fatal while the zone keeps looking.
                                 #[cfg(feature = "transport_iroh")]
-                                tokio::select! {
-                                    _ = scouted => {}
-                                    _ = self.wait_for_unicast_transport() => {}
+                                {
+                                    tokio::select! {
+                                        r = scouted => {
+                                            if r.is_err()
+                                                && self
+                                                    .manager()
+                                                    .get_transports_unicast()
+                                                    .await
+                                                    .is_empty()
+                                            {
+                                                tracing::warn!(
+                                                    "No zone peer connected within the scouting timeout"
+                                                );
+                                            }
+                                        }
+                                        _ = self.wait_for_unicast_transport() => {}
+                                    }
+                                    // The zone's dial in flight cannot be cancelled here.
+                                    super::zone::close_extra_zone_transports(self).await;
                                 }
                             } else {
                                 scouted.await?
@@ -277,7 +295,7 @@ impl Runtime {
                 }
             }
             if !peers.is_empty() {
-                self.connect_peers(&peers, true).await
+                self.connect_peers_then_zone(&peers, zone_set).await
             } else {
                 Ok(())
             }
@@ -293,8 +311,21 @@ impl Runtime {
             }
             Ok(())
         } else {
-            self.connect_peers(&peers, true).await
+            self.connect_peers_then_zone(&peers, zone_set).await
         }
+    }
+
+    /// A client's explicit connect, then the zone (if set), so the zone only looks for a member
+    /// when the explicit connect left the client without a transport.
+    async fn connect_peers_then_zone(&self, peers: &[EndPoints], zone_set: bool) -> ZResult<()> {
+        self.connect_peers(peers, true).await?;
+        #[cfg(feature = "transport_iroh")]
+        if zone_set {
+            super::zone::start(self);
+        }
+        #[cfg(not(feature = "transport_iroh"))]
+        let _ = zone_set;
+        Ok(())
     }
 
     /// Resolves once this runtime has at least one unicast transport.
