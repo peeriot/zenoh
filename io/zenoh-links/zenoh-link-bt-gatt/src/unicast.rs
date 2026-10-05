@@ -1,22 +1,30 @@
-use std::collections::{HashMap, HashSet};
 #[cfg(all(feature = "uring", target_os = "linux"))]
 use std::os::fd::RawFd;
-use std::fmt::{self, Display};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{self, Display},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
-use bluer::adv::{Advertisement, Type};
-use bluer::gatt::local::{
-    characteristic_control, Application, Characteristic, CharacteristicControlEvent,
-    CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicWrite,
-    CharacteristicWriteMethod, Service,
+use bluer::{
+    adv::{Advertisement, Type},
+    gatt::{
+        local::{
+            characteristic_control, Application, Characteristic, CharacteristicControlEvent,
+            CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicWrite,
+            CharacteristicWriteMethod, Service,
+        },
+        CharacteristicReader, CharacteristicWriter, WriteOp,
+    },
+    AdapterEvent, Address, Device, DiscoveryFilter, DiscoveryTransport,
 };
-use bluer::gatt::{CharacteristicReader, CharacteristicWriter, WriteOp};
-use bluer::{AdapterEvent, Address, Device, DiscoveryFilter, DiscoveryTransport};
 use futures::{pin_mut, StreamExt};
-use tokio::sync::{Mutex, RwLock};
-use tokio::task::JoinHandle;
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::{uuid, Uuid};
 use zenoh_core::{zasyncread, zasyncwrite};
@@ -29,10 +37,13 @@ use zenoh_protocol::core::{EndPoint, Locator, Priority};
 use zenoh_result::bail;
 use zenoh_result::{zerror, ZError, ZResult};
 
-use crate::unicast::io::{
-    GattCharRead, GattCharWrite, RemoteCharacteristicReader, RemoteCharacteristicWriter,
+use crate::{
+    addr::{BtGattAddress, Target},
+    unicast::io::{
+        GattCharRead, GattCharWrite, RemoteCharacteristicReader, RemoteCharacteristicWriter,
+    },
+    BT_GATT_LOCATOR_PREFIX,
 };
-use crate::BT_GATT_LOCATOR_PREFIX;
 
 mod io;
 
@@ -327,16 +338,10 @@ impl ConstructibleLinkManagerUnicast<()> for LinkManagerUnicastBtGatt {
 #[async_trait]
 impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
     async fn new_link(&self, endpoint: EndPoint) -> ZResult<LinkUnicast> {
-        let address = endpoint.address().to_string();
-        let (adapter_choice, device_name) = if let Some((adapter, device)) = address.split_once("@")
-        {
-            (Some(adapter.to_owned()), device.to_owned())
-        } else {
-            (None, address)
-        };
+        let address: BtGattAddress = endpoint.address().as_str().parse()?;
 
         // Attempt direct connection
-        let link = Arc::new(find_device(device_name, adapter_choice).await?);
+        let link = Arc::new(find_device(address.target, address.adapter).await?);
 
         Ok(LinkUnicast::from(link as Arc<dyn LinkUnicastTrait>))
     }
@@ -582,9 +587,9 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
     }
 }
 
-/// Attempts to discover and connect to the requested BLE device (using the name)
+/// Attempts to discover and connect to the requested BLE device
 async fn find_device(
-    device_name: String,
+    target: Target,
     adapter_choice: Option<String>,
 ) -> ZResult<LinkUnicastBtGatt<impl GattCharRead, impl GattCharWrite>> {
     let session = bluer::Session::new().await?;
@@ -593,45 +598,63 @@ async fn find_device(
     } else {
         session.default_adapter().await?
     };
-    let src = adapter.alias().await?;
     // Make sure adapter is powered
     adapter.set_powered(true).await?;
-    // Quicker and more efficient discovery by just looking for BLE devices
+    let src = adapter.address().await?.to_string();
+    // Quicker and more efficient discovery by just looking for BLE devices advertising our service
     adapter
         .set_discovery_filter(DiscoveryFilter {
             transport: DiscoveryTransport::Le,
-            pattern: Some(device_name.clone()),
+            uuids: HashSet::from([SERVICE_UUID]),
             ..Default::default()
         })
         .await?;
 
-    let discover = adapter.discover_devices().await?;
+    // NOTE: The stream starts with all devices already known to BlueZ, regardless of the discovery
+    // filter, and re-emits a device whenever its properties change (e.g. a fresh RSSI or name
+    // from an advertisement). Hence the explicit filtering in `is_candidate`.
+    let discover = adapter.discover_devices_with_changes().await?;
     pin_mut!(discover);
 
+    let mut tried = HashSet::new();
+
     while let Some(evt) = discover.next().await {
-        if let AdapterEvent::DeviceAdded(addr) = evt {
-            let device = adapter.device(addr).map_err(|e| {
-                let e = zerror!("Unable to get BT Device @addr {}:{}", addr, e);
-                tracing::error!("{}", e);
+        let AdapterEvent::DeviceAdded(addr) = evt else {
+            continue;
+        };
 
-                e
-            })?;
+        if tried.contains(&addr) {
+            continue;
+        }
 
-            match try_connect(&device, device_name.clone()).await {
-                Ok((char_writer, char_reader)) => {
-                    return Ok(LinkUnicastBtGatt::new(
-                        Some(device),
-                        char_reader,
-                        char_writer,
-                        &src,
-                        &device_name,
-                        adapter.name().to_owned(),
-                    ));
-                }
-                Err(e) => {
-                    let e = zerror!("Not our device: {:?}", e);
-                    tracing::error!("{}", e);
-                }
+        let device = adapter.device(addr).map_err(|e| {
+            let e = zerror!("Unable to get BT Device @addr {}:{}", addr, e);
+            tracing::error!("{}", e);
+
+            e
+        })?;
+
+        if !is_candidate(&device, &target).await {
+            continue;
+        }
+
+        tried.insert(addr);
+        tracing::debug!("Trying to connect to BLE device {}", addr);
+
+        match try_connect(&device).await {
+            Ok((char_writer, char_reader)) => {
+                return Ok(LinkUnicastBtGatt::new(
+                    Some(device),
+                    char_reader,
+                    char_writer,
+                    &src,
+                    &addr.to_string(),
+                    adapter.name().to_owned(),
+                ));
+            }
+            Err(e) => {
+                tracing::warn!("Skipping BLE device {}: {:?}", addr, e);
+                let _ = device.disconnect().await;
             }
         }
     }
@@ -642,19 +665,40 @@ async fn find_device(
     Err(e.into())
 }
 
+/// Checks whether a discovered device is worth connecting to: it must be in range,
+/// advertise the Zenoh GATT service and match the requested target
+async fn is_candidate(device: &Device, target: &Target) -> bool {
+    if let Target::Address(address) = target {
+        if device.address() != *address {
+            return false;
+        }
+    }
+
+    // Devices known to BlueZ but not currently advertising have no RSSI
+    if !matches!(device.rssi().await, Ok(Some(_))) {
+        return false;
+    }
+
+    let advertises_service = matches!(
+        device.uuids().await,
+        Ok(Some(uuids)) if uuids.contains(&SERVICE_UUID)
+    );
+    if !advertises_service {
+        return false;
+    }
+
+    match target {
+        Target::Any | Target::Address(_) => true,
+        Target::Name(name) => matches!(device.name().await, Ok(Some(n)) if n == *name),
+    }
+}
+
 /// Tries to connect to the specified device making sure it contains the proper services
 ///
 /// # Returns
 ///
 /// Types implementing [`GattCharWrite`] and [`GattCharRead`] which can be used to RX/TX data
-async fn try_connect(
-    device: &Device,
-    _device_name: String,
-) -> Result<(impl GattCharWrite, impl GattCharRead), Error> {
-    // Matching by device name is deliberately not used,
-    // because regular advertisements might not contain a name, or the name might be
-    // short and not very meaningful.
-
+async fn try_connect(device: &Device) -> Result<(impl GattCharWrite, impl GattCharRead), Error> {
     // Make sure we are connected
     let services = {
         // TODO:
