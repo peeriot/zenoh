@@ -91,6 +91,7 @@ impl From<&LinkAuthId> for InterceptorLinkWrapper {
             LinkAuthId::Vsock => Self(InterceptorLink::Vsock),
             LinkAuthId::Ws => Self(InterceptorLink::Ws),
             LinkAuthId::Ble => Self(InterceptorLink::Ble),
+            LinkAuthId::Iroh(_) => Self(InterceptorLink::Iroh),
         }
     }
 }

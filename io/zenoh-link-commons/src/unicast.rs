@@ -173,6 +173,7 @@ pub enum LinkAuthId {
     Vsock,
     Ws,
     Ble,
+    Iroh(String),
 }
 
 impl LinkAuthId {
@@ -188,6 +189,7 @@ impl LinkAuthId {
             LinkAuthId::Vsock => None,
             LinkAuthId::Ws => None,
             LinkAuthId::Ble => None,
+            LinkAuthId::Iroh(_) => None,
         }
     }
 }

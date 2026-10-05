@@ -336,6 +336,7 @@ impl Link {
     pub(crate) fn new(zid: ZenohId, link: &zenoh_link_commons::Link, is_qos: bool) -> Self {
         let auth_identifier = match &link.auth_identifier {
             LinkAuthId::Tls(Some(s)) | LinkAuthId::Quic(Some(s)) => Some(s.clone()),
+            LinkAuthId::Iroh(id) => Some(id.clone()),
             LinkAuthId::Tls(None)
             | LinkAuthId::Quic(None)
             | LinkAuthId::Tcp
