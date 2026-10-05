@@ -33,12 +33,10 @@ use zenoh_link_commons::{
     LinkUnicastTrait, NewLinkChannelSender,
 };
 use zenoh_protocol::core::{EndPoint, Locator, Priority};
-#[cfg(all(feature = "uring", target_os = "linux"))]
-use zenoh_result::bail;
-use zenoh_result::{zerror, ZError, ZResult};
+use zenoh_result::{bail, zerror, ZError, ZResult};
 
 use crate::{
-    addr::{BtGattAddress, Target},
+    addr::{BtGattAddress, Target, ANY, MAX_NAME_LEN},
     unicast::io::{
         GattCharRead, GattCharWrite, RemoteCharacteristicReader, RemoteCharacteristicWriter,
     },
@@ -298,14 +296,22 @@ impl<R, W> fmt::Debug for LinkUnicastBtGatt<R, W> {
 /*************************************/
 struct ListenerUnicastBtGatt {
     endpoint: EndPoint,
+    /// The locator peers can use to reach this listener (`bt_gatt/<adapter MAC>`)
+    locator: Locator,
     token: CancellationToken,
     handle: JoinHandle<ZResult<()>>,
 }
 
 impl ListenerUnicastBtGatt {
-    fn new(endpoint: EndPoint, token: CancellationToken, handle: JoinHandle<ZResult<()>>) -> Self {
+    fn new(
+        endpoint: EndPoint,
+        locator: Locator,
+        token: CancellationToken,
+        handle: JoinHandle<ZResult<()>>,
+    ) -> Self {
         Self {
             endpoint,
+            locator,
             token,
             handle,
         }
@@ -347,17 +353,27 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
     }
 
     async fn new_listener(&self, endpoint: EndPoint) -> ZResult<Locator> {
-        let device_name = endpoint.address().to_string();
+        let address: BtGattAddress = endpoint.address().as_str().parse()?;
+        let local_name = match address.target {
+            Target::Any => None,
+            Target::Name(name) if name.len() <= MAX_NAME_LEN => Some(name),
+            Target::Name(name) => bail!(
+                "Can not listen on {}: advertised name '{}' is longer than {} bytes",
+                endpoint,
+                name,
+                MAX_NAME_LEN
+            ),
+            Target::Address(_) => bail!(
+                "Can not listen on {}: a MAC address is not a valid listen address, use '{}' or a name",
+                endpoint,
+                ANY
+            ),
+        };
 
         let session = bluer::Session::new().await?;
 
         // Grab adapter
-        let (adapter, device_name) = if let Some((adapter, device)) = device_name.split_once("@") {
-            (Some(adapter), device.to_owned())
-        } else {
-            (None, device_name)
-        };
-        let adapter = if let Some(adapter) = adapter {
+        let adapter = if let Some(adapter) = &address.adapter {
             session.adapter(adapter)?
         } else {
             session.default_adapter().await?
@@ -372,14 +388,22 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
             adapter.set_discoverable(false).await?;
         }
 
-        tracing::info!("Adding new BLE listener: {}", &device_name);
+        let local_address = adapter.address().await?.to_string();
+        let locator = Locator::new(BT_GATT_LOCATOR_PREFIX, &local_address, "")?;
+
+        tracing::info!(
+            "Adding new BLE listener on {} ({}), advertised name: {:?}",
+            adapter.name(),
+            local_address,
+            local_name
+        );
 
         let le_advertisement = Advertisement {
             advertisement_type: Type::Peripheral,
             service_uuids: vec![SERVICE_UUID].into_iter().collect(),
             discoverable: Some(true),
-            // Use something small or else it won't fit in the regular (non-extended) ad
-            local_name: Some("ZN".to_string()),
+            // BlueZ places the name in the scan response, not in the advertisement itself
+            local_name,
             // We don't care about speed of visibility, so set min-max intervals to be quite large
             // so that we have more radio time for actual existing connections.
             min_interval: Some(Duration::from_millis(1500)),
@@ -515,8 +539,8 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
                                 None,
                                 rx,
                                 tx,
+                                &local_address,
                                 &central,
-                                adapter.alias().await.unwrap().as_str(),
                                 adapter.name().to_owned(),
                             ))
                                 as Arc<dyn LinkUnicastTrait>))
@@ -541,9 +565,10 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
 
         let acceptor_handle = zenoh_runtime::ZRuntime::Acceptor.spawn(task);
 
-        let locator = endpoint.to_locator();
-        let listener = ListenerUnicastBtGatt::new(endpoint, token, acceptor_handle);
-        listeners.insert(locator.to_string(), listener);
+        let key = endpoint.address().to_string();
+        let listener =
+            ListenerUnicastBtGatt::new(endpoint, locator.clone(), token, acceptor_handle);
+        listeners.insert(key, listener);
 
         Ok(locator)
     }
@@ -578,7 +603,7 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
     async fn get_locators(&self) -> Vec<Locator> {
         zasyncread!(self.listeners)
             .values()
-            .map(|x| x.endpoint.to_locator())
+            .map(|x| x.locator.clone())
             .collect()
     }
 

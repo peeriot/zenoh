@@ -14,6 +14,12 @@ use zenoh_result::{bail, ZResult};
 /// The `<target>` meaning "any device"
 pub const ANY: &str = "[::]";
 
+/// The maximum length of an advertised name.
+///
+/// BlueZ places the local name in the scan response, which is limited to 31 bytes,
+/// 2 of which are taken by the AD structure header.
+pub const MAX_NAME_LEN: usize = 29;
+
 /// What an endpoint points at
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
