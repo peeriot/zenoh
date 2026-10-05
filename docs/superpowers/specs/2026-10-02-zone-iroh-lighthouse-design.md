@@ -126,7 +126,7 @@ New crate `io/zenoh-links/zenoh-link-iroh`, enabled by a new
   manager). The accept loop runs on `ZRuntime::Acceptor`.
 - `iroh/<id>` locators are advertised in hellos and gossip like any other
   listener. Nodes built without the feature skip them at trace level. Nodes
-  with the feature but no endpoint fail that dial at debug level.
+  with the feature but no endpoint fail that dial at trace level.
 
 ### Endpoint ownership
 
@@ -174,8 +174,9 @@ authentication set `zone.secret_key`.
 ## 3. Zone discovery
 
 New module `zenoh/src/net/runtime/zone.rs`, started from the orchestrator
-right after the listeners are bound (before scouting, for clients). Runs as a
-task on the runtime's task controller, so it is cancelled on close.
+right after the listeners are bound (for clients: before scouting without
+connect endpoints, after the explicit connect with them). Runs as a task on
+the runtime's task controller, so it is cancelled on close.
 
 ### Topic
 
@@ -199,6 +200,14 @@ task on the runtime's task controller, so it is cancelled on close.
     the multicast scouting timeout is not an error. With multicast off and no
     connect endpoints, `open` waits up to `scouting.timeout` for a zone
     connection, then succeeds with a warning instead of bailing.
+  - **One transport:** a client keeps at most one unicast transport through
+    the zone path. With explicit connect endpoints, the zone starts only
+    after the explicit connect, so its round sees that transport and idles.
+    The round re-checks for a transport right before each dial. When a zone
+    dial still lands next to another transport (it raced multicast, whose
+    `select!` cannot cancel it), the zone-opened (`iroh/<id>` destination)
+    transport is closed and the pre-existing one kept. The same check runs
+    once after the multicast race in `start_client`.
 
 ### Dialling (members)
 
@@ -207,16 +216,24 @@ On every peer-list change, and on a 5s reconcile tick, for each listed peer `p`:
 1. **Tie-break:** dial only if `own_id < p.addr.id` (byte order). The other
    side dials us.
 2. **Already connected?** Skip if any unicast transport has a link whose
-   `dst` is `iroh/<p.addr.id>`.
-3. **Already dialling?** Skip if a dial to this id is in flight
+   `dst` is `iroh/<p.addr.id>`, or if any unicast transport's zid derives
+   (the default secret key, see §2) to `p.addr.id`. The latter covers
+   default-key members already connected over another protocol (e.g. TCP
+   from multicast scouting), which would otherwise be redialled forever and
+   rejected by `max_links = 1`.
+3. **Backing off?** After a failed dial to an id, skip it until a per-id
+   deadline. The delay starts at the 5s reconcile interval and doubles up to
+   `ZONE_TTL`. It resets when the peer's `EndpointAddr` differs from the one
+   last dialled; a success or the peer leaving the list forgets the state.
+4. **Already dialling?** Skip if a dial to this id is in flight
    (a `HashSet<EndpointId>` of pending dials).
-4. Otherwise **set** the peer's full `EndpointAddr` from the topic in the
+5. Otherwise **set** the peer's full `EndpointAddr` from the topic in the
    `MemoryLookup` (`set_endpoint_info`; the topic is authoritative, so stale
    ports are replaced rather than accumulated), then spawn an abortable dial:
    `manager.open_transport_unicast("iroh/<id>")`.
 
-A failed or dropped connection is retried by the next tick, while the peer is
-still listed.
+A dropped connection is retried by the next tick, and a failed dial once its
+backoff expires, while the peer is still listed.
 
 ### Failure handling
 

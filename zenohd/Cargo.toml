@@ -28,6 +28,7 @@ version = { workspace = true }
 [features]
 default = ["zenoh/default"]
 shared-memory = ["zenoh/shared-memory"]
+transport_iroh = ["zenoh/transport_iroh"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }

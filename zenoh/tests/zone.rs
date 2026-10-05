@@ -180,8 +180,9 @@ async fn two_peers_in_a_zone_connect_once() {
         connected(&a, &b).await && connected(&b, &a).await
     })
     .await;
-    tokio::time::sleep(Duration::from_secs(6)).await; // past one reconcile tick
-                                                      // max_links = 1 and per-zid dedup would hide a double dial, so check the dial attempts.
+    // Past one reconcile tick.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    // max_links = 1 and per-zid dedup would hide a double dial, so check the dial attempts.
     let (da, db) = (dials_from(&a.zid()), dials_from(&b.zid()));
     assert!(
         (da == 0) != (db == 0),
