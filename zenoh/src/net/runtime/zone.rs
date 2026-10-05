@@ -14,16 +14,17 @@
 //! Zone discovery: find the other members of this node's zone through an
 //! iroh-lighthouse topic and connect to them over iroh.
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tokio_util::sync::CancellationToken;
 use zenoh_config::zone::Zone;
 use zenoh_core::zlock;
 use zenoh_link::iroh::{
-    iroh::{EndpointId, Watcher},
+    derive_secret_key,
+    iroh::{EndpointAddr, EndpointId, Watcher},
     iroh_lighthouse_client::{parse_url, protocol::Peer, Lighthouse, Topic},
     locator_of, IrohEndpoint, IROH_LOCATOR_PREFIX,
 };
@@ -42,6 +43,59 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// Between two announcing members only the lower endpoint id dials.
 pub(crate) fn should_dial(own: &EndpointId, remote: &EndpointId) -> bool {
     own.as_bytes() < remote.as_bytes()
+}
+
+/// Per-peer redial backoff for members. After a failed dial a peer is not dialled again until its
+/// deadline; the delay starts at [`ZONE_RECONCILE_INTERVAL`] and doubles up to [`ZONE_TTL`]. A new
+/// address for the peer resets it, a success or the peer leaving the list forgets it.
+#[derive(Default)]
+struct DialBackoff {
+    peers: HashMap<EndpointId, PeerBackoff>,
+}
+
+struct PeerBackoff {
+    /// The address last dialled.
+    addr: EndpointAddr,
+    delay: Duration,
+    until: Instant,
+}
+
+impl DialBackoff {
+    /// Whether `addr` may be dialled at `now`.
+    fn may_dial(&mut self, addr: &EndpointAddr, now: Instant) -> bool {
+        match self.peers.get(&addr.id) {
+            None => true,
+            Some(b) if b.addr != *addr => {
+                self.peers.remove(&addr.id);
+                true
+            }
+            Some(b) => now >= b.until,
+        }
+    }
+
+    fn failed(&mut self, addr: EndpointAddr, now: Instant) {
+        let delay = match self.peers.get(&addr.id) {
+            Some(b) if b.addr == addr => (b.delay * 2).min(ZONE_TTL),
+            _ => ZONE_RECONCILE_INTERVAL,
+        };
+        self.peers.insert(
+            addr.id,
+            PeerBackoff {
+                addr,
+                delay,
+                until: now + delay,
+            },
+        );
+    }
+
+    fn succeeded(&mut self, id: &EndpointId) {
+        self.peers.remove(id);
+    }
+
+    /// Forgets the peers that are no longer in the zone's list.
+    fn retain_listed(&mut self, listed: &HashSet<EndpointId>) {
+        self.peers.retain(|id, _| listed.contains(id));
+    }
 }
 
 /// Spawns the zone discovery task when both a zone and an iroh endpoint are present.
@@ -66,6 +120,7 @@ pub(crate) fn start(runtime: &Runtime) {
         topic: Topic::with_secret(zone.topic.clone(), zone.id.as_bytes()),
         zone,
         pending: Arc::new(Mutex::new(HashSet::new())),
+        backoff: Arc::new(Mutex::new(DialBackoff::default())),
     };
     let token = runtime.get_cancellation_token();
     runtime.spawn(async move {
@@ -115,6 +170,7 @@ struct Discovery {
     topic: Topic,
     zone: Zone,
     pending: Arc<Mutex<HashSet<EndpointId>>>,
+    backoff: Arc<Mutex<DialBackoff>>,
 }
 
 impl Discovery {
@@ -241,15 +297,26 @@ impl Discovery {
     async fn reconcile(&self, peers: &[Peer]) {
         let own = self.iroh.id();
         let manager = self.runtime.manager();
+        // A peer is connected when a link goes to its `iroh/<id>`, or when a transport's zid
+        // derives that endpoint id (default-key nodes connected over another protocol, e.g. TCP).
         let mut connected = HashSet::new();
         for t in manager.get_transports_unicast().await {
             if let Ok(links) = t.get_links() {
                 connected.extend(links.into_iter().map(|l| l.dst));
             }
+            if let Ok(zid) = t.get_zid() {
+                connected.insert(locator_of(&derive_secret_key(&zid.to_le_bytes()).public()));
+            }
         }
+        let listed: HashSet<EndpointId> = peers.iter().map(|p| p.addr.id).collect();
+        zlock!(self.backoff).retain_listed(&listed);
+        let now = Instant::now();
         for peer in peers {
             let id = peer.addr.id;
             if !should_dial(&own, &id) || connected.contains(&locator_of(&id)) {
+                continue;
+            }
+            if !zlock!(self.backoff).may_dial(&peer.addr, now) {
                 continue;
             }
             if !zlock!(self.pending).insert(id) {
@@ -258,6 +325,7 @@ impl Discovery {
             self.iroh.set_addr(peer.addr.clone());
             tracing::debug!("zone dial from {} to {id}", self.runtime.zid());
             let this = self.clone();
+            let addr = peer.addr.clone();
             // Abortable: a dial in flight must not hold up runtime close.
             self.runtime.spawn_abortable(async move {
                 match this
@@ -266,8 +334,14 @@ impl Discovery {
                     .open_transport_unicast(locator_of(&id).into())
                     .await
                 {
-                    Ok(_) => tracing::debug!("Connected to zone peer {id}"),
-                    Err(e) => tracing::debug!("Cannot connect to zone peer {id}: {e}"),
+                    Ok(_) => {
+                        tracing::debug!("Connected to zone peer {id}");
+                        zlock!(this.backoff).succeeded(&id);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Cannot connect to zone peer {id}: {e}");
+                        zlock!(this.backoff).failed(addr, Instant::now());
+                    }
                 }
                 zlock!(this.pending).remove(&id);
             });
@@ -277,9 +351,87 @@ impl Discovery {
 
 #[cfg(test)]
 mod tests {
-    use zenoh_link::iroh::iroh::SecretKey;
+    use std::{
+        collections::HashSet,
+        time::{Duration, Instant},
+    };
 
-    use super::should_dial;
+    use zenoh_link::iroh::iroh::{EndpointAddr, SecretKey};
+
+    use super::{should_dial, DialBackoff, ZONE_RECONCILE_INTERVAL, ZONE_TTL};
+
+    fn addr(port: u16) -> (EndpointAddr, EndpointAddr) {
+        let id = SecretKey::generate().public();
+        (
+            EndpointAddr::new(id).with_ip_addr(([127, 0, 0, 1], port).into()),
+            EndpointAddr::new(id).with_ip_addr(([127, 0, 0, 1], port + 1).into()),
+        )
+    }
+
+    #[test]
+    fn failed_dials_back_off_doubling_up_to_the_ttl() {
+        let (a, _) = addr(1000);
+        let mut b = DialBackoff::default();
+        let mut now = Instant::now();
+        assert!(b.may_dial(&a, now));
+        let mut expected = ZONE_RECONCILE_INTERVAL;
+        for _ in 0..10 {
+            b.failed(a.clone(), now);
+            assert!(!b.may_dial(&a, now));
+            assert!(!b.may_dial(&a, now + expected - Duration::from_millis(1)));
+            assert!(
+                b.may_dial(&a, now + expected),
+                "delay should be {expected:?}"
+            );
+            now += expected;
+            expected = (expected * 2).min(ZONE_TTL);
+        }
+        assert_eq!(expected, ZONE_TTL, "the delay is capped at ZONE_TTL");
+    }
+
+    #[test]
+    fn success_clears_the_backoff() {
+        let (a, _) = addr(1000);
+        let mut b = DialBackoff::default();
+        let now = Instant::now();
+        b.failed(a.clone(), now);
+        b.failed(a.clone(), now);
+        b.succeeded(&a.id);
+        assert!(b.may_dial(&a, now));
+        b.failed(a.clone(), now);
+        assert!(b.may_dial(&a, now + ZONE_RECONCILE_INTERVAL));
+    }
+
+    #[test]
+    fn a_new_address_resets_the_backoff() {
+        let (a, moved) = addr(1000);
+        let mut b = DialBackoff::default();
+        let now = Instant::now();
+        b.failed(a.clone(), now);
+        b.failed(a.clone(), now);
+        assert!(!b.may_dial(&a, now));
+        assert!(
+            b.may_dial(&moved, now),
+            "a changed address is dialled at once"
+        );
+        b.failed(moved.clone(), now);
+        assert!(
+            b.may_dial(&moved, now + ZONE_RECONCILE_INTERVAL),
+            "and its delay starts over"
+        );
+    }
+
+    #[test]
+    fn a_peer_that_leaves_is_forgotten() {
+        let ((a, _), (c, _)) = (addr(1000), addr(2000));
+        let mut b = DialBackoff::default();
+        let now = Instant::now();
+        b.failed(a.clone(), now);
+        b.failed(c.clone(), now);
+        b.retain_listed(&HashSet::from([c.id]));
+        assert!(b.may_dial(&a, now), "a left: its state is gone");
+        assert!(!b.may_dial(&c, now), "c is still listed: its state is kept");
+    }
 
     #[test]
     fn exactly_one_side_of_a_member_pair_dials() {
