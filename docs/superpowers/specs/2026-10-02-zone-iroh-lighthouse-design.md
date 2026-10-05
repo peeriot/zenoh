@@ -102,9 +102,10 @@ New crate `io/zenoh-links/zenoh-link-iroh`, enabled by a new
 ### Locator and link semantics
 
 - Protocol prefix `iroh`; locator address is the endpoint id:
-  `iroh/<endpoint-id>`. A listen endpoint is `iroh/` with an empty address,
-  or `iroh/<own-endpoint-id>`; any other address on a listen endpoint is an
-  error.
+  `iroh/<endpoint-id>`. A listen endpoint is `iroh/auto` (zenoh endpoints
+  cannot have an empty address) or `iroh/<own-endpoint-id>`; any other
+  address on a listen endpoint is an error. Either way the listener's
+  locator is `iroh/<own-endpoint-id>`.
 - ALPN: `myrmic/1`.
 - One zenoh link = one iroh `Connection` with one bidirectional stream: the
   dialler calls `open_bi`, the acceptor `accept_bi`.
@@ -149,7 +150,7 @@ uses) stay isolated.
   `LinkManagerBuilderUnicast::make`, which hands it to
   `LinkManagerUnicastIroh::new`. Creating the iroh link manager without an
   endpoint is an error ("iroh endpoint not configured").
-- The link manager runs one accept loop over the endpoint while an `iroh/`
+- The link manager runs one accept loop over the endpoint while an `iroh`
   listener exists, and pushes accepted links into the new-link channel like
   the other link managers.
 - On runtime close, the endpoint is closed after the transport manager has
@@ -183,7 +184,7 @@ task on the runtime's task controller, so it is cancelled on close.
 
 ### Per mode
 
-- **Peer and router ("members"):** implicitly listen on `iroh/` (added to the
+- **Peer and router ("members"):** implicitly listen on `iroh/auto` (added to the
   listener set when no `iroh` listener is configured, not to the user's
   config). Join the topic with `Lighthouse::join(&endpoint, topic, ZONE_TTL)`,
   `ZONE_TTL = 120s` (internal). The session re-announces itself, at half the
@@ -262,12 +263,12 @@ Unit (no network):
 - Key derivation: the same zid gives the same key, different zids give
   different keys, an explicit `secret_key` overrides derivation, and a
   malformed one is an error naming `zone.secret_key`.
-- Tie-break predicate; implicit `iroh/` listener added once.
+- Tie-break predicate; implicit `iroh/auto` listener added once.
 - `iroh` locator inspector: reliable, not multicast.
 
 Link level (`zenoh-link-iroh/tests`, offline):
 
-- Two endpoints with `relays: false`: listen on `iroh/`, dial `iroh/<id>` with
+- Two endpoints with `relays: false`: listen on `iroh/auto`, dial `iroh/<id>` with
   addresses seeded into the `MemoryLookup`, exchange bytes both ways; check
   locators and `LinkAuthId::Iroh`. Listen-address validation; garbage ids are
   rejected.
@@ -277,7 +278,7 @@ Session level (`zenoh/tests/zone.rs`, `transport_iroh_test` + `unstable`,
 
 - `open` is prompt with a dead lighthouse; `close` is prompt with a lighthouse
   that accepts TCP but never answers.
-- Explicit `iroh/` listener plus zone starts once; malformed `secret_key`
+- Explicit `iroh/auto` listener plus zone starts once; malformed `secret_key`
   fails `open`.
 - Two peers in a zone connect, and exactly one side dials, counted from the
   dial log lines (a link count alone cannot show this because `max_links = 1`

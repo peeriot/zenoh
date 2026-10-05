@@ -36,7 +36,7 @@
 4. **Peer restart with a stable zid:** the other side reconnects, with the restarted node in both roles. Test: Task 6 `peer_restart_is_redialled`.
 5. **Malformed `zone.secret_key`:** `zenoh::open` returns an error naming `zone.secret_key` and does not panic. Test: Task 5 `invalid_secret_key_is_rejected`.
 
-Also tested but not in this list: an explicit `iroh/` listener alongside a zone (Task 5 `explicit_iroh_listener_with_zone_is_not_duplicated`).
+Also tested but not in this list: an explicit `iroh/auto` listener alongside a zone (Task 5 `explicit_iroh_listener_with_zone_is_not_duplicated`).
 
 ## Spec deltas (decided while planning; already applied to the spec)
 
@@ -74,7 +74,7 @@ Also tested but not in this list: an explicit `iroh/` listener alongside a zone 
 | `zenoh/src/net/runtime/iroh_endpoint.rs` | create | decide whether to bind, resolve the key, bind for a runtime |
 | `zenoh/src/net/runtime/zone.rs` | create | lighthouse join/lookup, reconcile, tie-break, leave |
 | `zenoh/src/net/runtime/mod.rs` | modify | own `Option<IrohEndpoint>`, pass to transport manager, close |
-| `zenoh/src/net/runtime/orchestrator.rs` | modify | implicit `iroh/` listener, start zone in each mode |
+| `zenoh/src/net/runtime/orchestrator.rs` | modify | implicit `iroh/auto` listener, start zone in each mode |
 | `zenoh/tests/zone.rs` | create | session-level zone tests against in-process lighthouse |
 
 ---
@@ -278,7 +278,7 @@ Expected: all pass, including existing config tests (proves the default config s
   // ///
   // /// Nodes with the same zone id find each other through an iroh-lighthouse server and
   // /// connect over the iroh network (`iroh/<endpoint-id>` links). Peers and routers listen on
-  // /// `iroh/` automatically and announce themselves; clients only look the zone up.
+  // /// `iroh/auto` automatically and announce themselves; clients only look the zone up.
   // ///
   // /// Shorthand: `zone: "my-zone"`. Full form:
   // zone: {
@@ -451,6 +451,8 @@ pub use endpoint::{IrohEndpoint, IrohEndpointConfig};
 pub use unicast::*;
 
 pub const IROH_LOCATOR_PREFIX: &str = "iroh";
+/// Listen address meaning "this endpoint": `iroh/auto`.
+pub const IROH_LISTEN_AUTO: &str = "auto";
 /// ALPN spoken on every zenoh iroh connection.
 pub const ALPN: &[u8] = b"myrmic/1";
 /// Same constraint as the QUIC link: zenoh frames streamed batches with a 16-bit length.
@@ -592,7 +594,7 @@ jj new
 - Produces: `pub struct LinkManagerUnicastIroh` with `pub fn new(manager: NewLinkChannelSender, endpoint: IrohEndpoint) -> Self`, implementing `LinkManagerUnicastTrait` (including `get_locators_noloopback`, which equals `get_locators`); and `pub struct LinkUnicastIroh` implementing `LinkUnicastTrait` (single stream; the `priority` arguments are ignored; `get_fd` bails under `uring`).
 
 Behaviour:
-- `new_listener(ep)`: the address must be empty or equal to the own id, otherwise error `"iroh listener address must be empty or this endpoint's id"`. A second listener is an error `"already listening on iroh"`. It spawns one accept task and returns `locator_of(&own_id)` with the endpoint's metadata.
+- `new_listener(ep)`: the address must be `auto` or equal to the own id, otherwise error `"iroh listener address must be `auto` or this endpoint's id"` (zenoh rejects an empty endpoint address, so `iroh/` cannot be written). A second listener is an error `"already listening on iroh"`. It spawns one accept task and returns `locator_of(&own_id)` with the endpoint's metadata.
 - `del_listener` cancels the accept task. `get_listeners` and `get_locators` report the single listener, if any.
 - `new_link(ep)`: parse the address as an `EndpointId` (error `"invalid iroh endpoint id"`), then `connect(EndpointAddr::new(id), ALPN)`, then `open_bi`.
 - The accept task loops over `endpoint.accept()` until it is cancelled or returns `None`. For each one: `incoming.accept()?.await`, then `accept_bi`, then `send_async(LinkUnicast(link))`. Per-connection errors are logged at `debug` and the loop continues. Each connection is handled in its own spawned task, so one slow handshake does not block others.
@@ -643,7 +645,7 @@ async fn dial_by_id_and_exchange_bytes() {
     let (ma, accepted) = manager(a.clone());
     let (mb, _) = manager(b.clone());
 
-    let locator = ma.new_listener(EndPoint::from_str("iroh/").unwrap()).await.unwrap();
+    let locator = ma.new_listener(EndPoint::from_str("iroh/auto").unwrap()).await.unwrap();
     assert_eq!(locator.to_string(), format!("iroh/{}", a.id()));
 
     b.set_addr(dialable(&a).await);
@@ -676,7 +678,7 @@ async fn listener_rejects_a_foreign_id_and_a_second_listener() {
     let (ma, _) = manager(a.clone());
     assert!(ma.new_listener(EndPoint::from_str(&format!("iroh/{other}")).unwrap()).await.is_err());
     ma.new_listener(EndPoint::from_str(&format!("iroh/{}", a.id())).unwrap()).await.unwrap();
-    assert!(ma.new_listener(EndPoint::from_str("iroh/").unwrap()).await.is_err());
+    assert!(ma.new_listener(EndPoint::from_str("iroh/auto").unwrap()).await.is_err());
     a.close().await;
 }
 
@@ -721,7 +723,7 @@ use zenoh_protocol::{
 };
 use zenoh_result::{bail, zerror, ZResult};
 
-use crate::{locator_of, IrohEndpoint, ALPN, IROH_MAX_MTU};
+use crate::{locator_of, IrohEndpoint, ALPN, IROH_LISTEN_AUTO, IROH_MAX_MTU};
 
 pub struct LinkUnicastIroh {
     connection: Connection,
@@ -884,8 +886,8 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastIroh {
     async fn new_listener(&self, endpoint: EndPoint) -> ZResult<Locator> {
         let own = self.iroh.id();
         let addr = endpoint.address();
-        if !addr.as_str().is_empty() && addr.as_str() != own.to_string() {
-            bail!("iroh listener address must be empty or this endpoint's id ({own}), got {addr}");
+        if addr.as_str() != IROH_LISTEN_AUTO && addr.as_str() != own.to_string() {
+            bail!("iroh listener address must be `{IROH_LISTEN_AUTO}` or this endpoint's id ({own}), got {addr}");
         }
         let mut guard = self.listener.lock().unwrap();
         if guard.is_some() {
@@ -1056,7 +1058,7 @@ cargo check -p zenoh --all-targets
 cargo check -p zenoh --all-targets --features transport_iroh
 cargo test -p zenoh-link -p zenoh-transport --features zenoh-transport/transport_iroh --lib
 ```
-Expected: all succeed. A transport manager without an endpoint that is asked to listen on `iroh/` returns `iroh endpoint not configured` (Task 5 makes the runtime supply the endpoint).
+Expected: all succeed. A transport manager without an endpoint that is asked to listen on `iroh/auto` returns `iroh endpoint not configured` (Task 5 makes the runtime supply the endpoint).
 
 - [ ] **Step 5: Lint and commit**
 
@@ -1091,7 +1093,7 @@ Rules:
 - Key: `zone.secret_key` parsed with `SecretKey::from_str(expose_secret())`. On failure, return the error `"invalid zone.secret_key: {e}"`. Without one, derive from `zid.to_le_bytes()`.
 - `relays`: `zone.relays` if a zone is set, otherwise `true`.
 - `lighthouse`: validated with `iroh_lighthouse_client::parse_url(&zone.lighthouse)` when a zone is set, and on failure returns `"invalid zone.lighthouse {url}: {e}"`. It is not passed to the endpoint, because nothing publishes to or resolves through the lighthouse directory.
-- `with_zone_listener` appends `iroh/` when `has_zone` is true and no listener already has protocol `iroh`. It is called for peer and router only.
+- `with_zone_listener` appends `iroh/auto` when `has_zone` is true and no listener already has protocol `iroh`. It is called for peer and router only.
 - With a zone set but the crate built without `transport_iroh`, the runtime logs `tracing::warn!("zone is configured but zenoh was built without the transport_iroh feature; ignoring it")` once at start and otherwise behaves as if no zone were set.
 - On close: `self.manager.close().await;` then `if let Some(iroh) = &self.iroh { iroh.close().await }`.
 
@@ -1139,7 +1141,7 @@ mod tests {
     #[test]
     fn zone_listener_is_added_once() {
         let tcp = EndPoint::from_str("tcp/[::]:0").unwrap();
-        let iroh = EndPoint::from_str("iroh/").unwrap();
+        let iroh = EndPoint::from_str("iroh/auto").unwrap();
         assert_eq!(with_zone_listener(vec![tcp.clone()], false), vec![tcp.clone()]);
         assert_eq!(with_zone_listener(vec![tcp.clone()], true), vec![tcp.clone(), iroh.clone()]);
         assert_eq!(with_zone_listener(vec![iroh.clone()], true), vec![iroh]);
@@ -1188,7 +1190,7 @@ async fn open_succeeds_with_unreachable_lighthouse() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_iroh_listener_with_zone_is_not_duplicated() {
     let mut c = zone_config("z", "http://127.0.0.1:1", WhatAmI::Peer, None);
-    c.insert_json5("listen/endpoints", r#"["iroh/"]"#).unwrap();
+    c.insert_json5("listen/endpoints", r#"["iroh/auto"]"#).unwrap();
     let s = zenoh::open(c).await.unwrap();
     s.close().await.unwrap();
 }
@@ -1246,7 +1248,7 @@ pub(crate) fn resolve_secret_key(zone: Option<&Zone>, zid: ZenohIdProto) -> ZRes
 
 pub(crate) fn with_zone_listener(mut listeners: Vec<EndPoint>, has_zone: bool) -> Vec<EndPoint> {
     if has_zone && !listeners.iter().any(|e| e.protocol().as_str() == IROH_LOCATOR_PREFIX) {
-        listeners.push(EndPoint::from_str("iroh/").expect("valid endpoint"));
+        listeners.push(EndPoint::from_str("iroh/auto").expect("valid endpoint"));
     }
     listeners
 }
