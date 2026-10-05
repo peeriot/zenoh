@@ -26,6 +26,7 @@ pub mod gateway;
 mod include;
 pub mod qos;
 pub mod wrappers;
+pub mod zone;
 
 #[allow(unused_imports)]
 use std::convert::TryFrom;
@@ -328,6 +329,7 @@ pub enum InterceptorLink {
     Vsock,
     Ws,
     Ble,
+    Iroh,
 }
 
 impl std::fmt::Display for InterceptorLink {
@@ -560,6 +562,9 @@ validated_struct::validator! {
         mode: Option<whatami::WhatAmI>,
         region_name: Option<RegionName>,
         pub gateway: gateway::GatewayConf,
+        /// Lighthouse-based discovery of the other members of a zone, connected over iroh.
+        /// Either a zone id string or `{ id, topic, lighthouse, secret_key, relays }`.
+        zone: Option<zone::ZoneConf>,
         /// Which zenoh nodes to connect to.
         pub connect:
         ConnectConfig {

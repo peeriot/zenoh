@@ -275,6 +275,27 @@
     south: "auto"
   },
 
+  // /// Zone discovery over iroh (requires the `transport_iroh` feature).
+  // ///
+  // /// Nodes with the same zone id find each other through an iroh-lighthouse server and
+  // /// connect over the iroh network (`iroh/<endpoint-id>` links). Peers and routers listen on
+  // /// `iroh/` automatically and announce themselves; clients only look the zone up.
+  // ///
+  // /// Shorthand: `zone: "my-zone"`. Full form:
+  // zone: {
+  //   /// Zone id, used as the lighthouse topic secret. Required, non-empty.
+  //   id: "my-zone",
+  //   /// Lighthouse topic name.
+  //   topic: "myrmic/zone",
+  //   /// Lighthouse address. A bare host means https; localhost and IP addresses mean http.
+  //   lighthouse: "iroh.ichor.io",
+  //   /// iroh ed25519 secret key (hex or base32). When unset it is derived from the zenoh id,
+  //   /// which is public: anyone who knows the zid can derive the key. Set it for real authentication.
+  //   secret_key: null,
+  //   /// Use the n0 relay and DNS infrastructure. Disable for LAN-only or isolated deployments.
+  //   relays: true,
+  // },
+
   // /// Overwrite QoS options for Zenoh messages by key expression (ignores Zenoh API QoS config for overwritten values)
   // qos: {
   //   /// Overwrite QoS options for PUT and DELETE messages
@@ -310,7 +331,7 @@
   //       ],
   //       /// Optional list of link protocols. Transports with at least one of these links will have their qos overwritten.
   //       /// If absent, the overwrite will be applied to all transports. An empty list is invalid.
-  //       link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock"],
+  //       link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock", "iroh"],
   //       /// List of message types to apply to (replies qos cannot be overwritten).
   //       messages: [
   //         "put", // put publications
@@ -374,7 +395,7 @@
   //     interfaces: [ "wlan0" ],
   //     /// Optional list of link protocols. Transports with at least one of these links will have their messages filtered.
   //     /// If absent, the rules will be applied to all transports. An empty list is invalid.
-  //     link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock"],
+  //     link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock", "iroh"],
   //     /// Optional list of data flows messages will be processed on ("egress" and/or "ingress").
   //     /// If absent, the rules will be applied to both flows.
   //     flows: ["ingress", "egress"],
@@ -479,7 +500,7 @@
   //       "id": "subject4",
   //       /// link protocols can also be used to identify transports to filter messages on.
   //       /// If absent, the rules will be applied to all transports. An empty list is invalid.
-  //       link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock"],
+  //       link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock", "iroh"],
   //       /// ZIDs can also be used to identify transports to filter messages on.
   //       /// NOTE: ZID is not backed by an authentication mechanism, it can only be trusted for ACL if it is
   //       ///       dynamically added/removed by eventual dedicated Zenoh mechanisms when transports are opened/closed.
@@ -514,7 +535,7 @@
   //     interfaces: [ "wlan0" ],
   //     /// Optional list of link protocols. Transports with at least one of these links will have their messages filtered.
   //     /// If absent, the rule will be applied to all transports. An empty list is invalid.
-  //     link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock"],
+  //     link_protocols: [ "tcp", "udp", "tls", "quic", "ws", "serial", "unixsock-stream", "unixpipe", "vsock", "iroh"],
   //     /// Optional list of data flows messages will be processed on ("egress" and/or "ingress").
   //     /// If absent, the filter will be applied to both flows.
   //     flows: ["ingress", "egress"],

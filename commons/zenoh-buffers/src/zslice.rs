@@ -23,8 +23,7 @@ use crate::{
     buffer::{Buffer, SplitBuffer},
     reader::{BacktrackableReader, DidntRead, HasReader, Reader},
     writer::{BacktrackableWriter, DidntWrite, Writer},
-    Arc,
-    ZBuf,
+    Arc, ZBuf,
 };
 
 /*************************************/

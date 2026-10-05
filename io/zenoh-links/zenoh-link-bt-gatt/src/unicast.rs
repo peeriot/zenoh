@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Display};
 #[cfg(all(feature = "uring", target_os = "linux"))]
 use std::os::fd::RawFd;
-use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::Duration;
 
