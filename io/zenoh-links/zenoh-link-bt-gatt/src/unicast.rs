@@ -3,7 +3,8 @@ use std::os::fd::RawFd;
 use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display},
-    sync::Arc,
+    future::Future,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -25,7 +26,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::{uuid, Uuid};
 use zenoh_core::{zasyncread, zasyncwrite};
 use zenoh_link_commons::{
@@ -292,6 +293,40 @@ impl<R, W> fmt::Debug for LinkUnicastBtGatt<R, W> {
 }
 
 /*************************************/
+/*          RUNTIME                  */
+/*************************************/
+/// The runtime on which all BlueZ interactions are driven.
+///
+/// `bluer` spawns the task driving its D-Bus connection (as well as the tasks serving our GATT
+/// application) on the runtime which creates the session. Zenoh's runtimes may have their (few)
+/// worker threads blocked synchronously, e.g. while pushing messages into a full transmission
+/// pipeline, which in turn waits on a D-Bus reply to drain: a deadlock that only resolves when the
+/// push times out and closes the transport. A dedicated runtime keeps the D-Bus traffic flowing.
+fn bt_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("bt-gatt")
+            .enable_all()
+            .build()
+            .expect("Unable to create the BT GATT runtime")
+    })
+}
+
+/// Runs `future` on the [`bt_runtime`], aborting it if the returned future is dropped
+async fn on_bt_runtime<F, T>(future: F) -> ZResult<T>
+where
+    F: Future<Output = ZResult<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    AbortOnDropHandle::new(bt_runtime().spawn(future))
+        .await
+        .map_err(|e| zerror!("BT GATT task failed: {}", e))?
+}
+
+/*************************************/
 /*          LISTENER                 */
 /*************************************/
 struct ListenerUnicastBtGatt {
@@ -347,230 +382,20 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
         let address: BtGattAddress = endpoint.address().as_str().parse()?;
 
         // Attempt direct connection
-        let link = Arc::new(find_device(address.target, address.adapter).await?);
+        let link = on_bt_runtime(find_device(address.target, address.adapter)).await?;
 
-        Ok(LinkUnicast::from(link as Arc<dyn LinkUnicastTrait>))
+        Ok(LinkUnicast::from(
+            Arc::new(link) as Arc<dyn LinkUnicastTrait>
+        ))
     }
 
     async fn new_listener(&self, endpoint: EndPoint) -> ZResult<Locator> {
-        let address: BtGattAddress = endpoint.address().as_str().parse()?;
-        let local_name = match address.target {
-            Target::Any => None,
-            Target::Name(name) if name.len() <= MAX_NAME_LEN => Some(name),
-            Target::Name(name) => bail!(
-                "Can not listen on {}: advertised name '{}' is longer than {} bytes",
-                endpoint,
-                name,
-                MAX_NAME_LEN
-            ),
-            Target::Address(_) => bail!(
-                "Can not listen on {}: a MAC address is not a valid listen address, use '{}' or a name",
-                endpoint,
-                ANY
-            ),
-        };
-
-        let session = bluer::Session::new().await?;
-
-        // Grab adapter
-        let adapter = if let Some(adapter) = &address.adapter {
-            session.adapter(adapter)?
-        } else {
-            session.default_adapter().await?
-        };
-
-        if !adapter.is_powered().await? {
-            adapter.set_powered(true).await?;
-        }
-
-        // Close pre-existing active advertising instances for a clean slate
-        if adapter.active_advertising_instances().await? > 0 {
-            adapter.set_discoverable(false).await?;
-        }
-
-        let local_address = adapter.address().await?.to_string();
-        let locator = Locator::new(BT_GATT_LOCATOR_PREFIX, &local_address, "")?;
-
-        tracing::info!(
-            "Adding new BLE listener on {} ({}), advertised name: {:?}",
-            adapter.name(),
-            local_address,
-            local_name
-        );
-
-        let le_advertisement = Advertisement {
-            advertisement_type: Type::Peripheral,
-            service_uuids: vec![SERVICE_UUID].into_iter().collect(),
-            discoverable: Some(true),
-            // BlueZ places the name in the scan response, not in the advertisement itself
-            local_name,
-            // We don't care about speed of visibility, so set min-max intervals to be quite large
-            // so that we have more radio time for actual existing connections.
-            min_interval: Some(Duration::from_millis(1500)),
-            max_interval: Some(Duration::from_millis(2000)),
-            // While it would be good to enable extended advertising (less conflicts with other BLE
-            // devices that might be present), it is not ideal as some BLE stacks might not support it
-            // and thus might not detect our presence.
-            // secondary_channel: Some(SecondaryChannel::TwoM),
-            ..Default::default()
-        };
-        let _adv_handle = adapter.advertise(le_advertisement.clone()).await?;
-
-        // Create GATT control application which will expose the Zenoh BLE Service for communication
-        let (mut char_write_control, char_write_handle) = characteristic_control();
-        let (mut char_notify_control, char_notify_handle) = characteristic_control();
-        let app = Application {
-            services: vec![Service {
-                uuid: SERVICE_UUID,
-                primary: true,
-                characteristics: vec![
-                    Characteristic {
-                        uuid: RX_CHAR_UUID,
-                        write: Some(CharacteristicWrite {
-                            write: true,
-                            write_without_response: true,
-                            // TODO:
-                            // Try `CharacteristicWriteMethod::Fun` to see
-                            // if this work-arounds the bug where BlueZ disconnects
-                            // with ATT disconnect code 0x13 after ~ 8 seconds
-                            method: CharacteristicWriteMethod::Io,
-                            ..Default::default()
-                        }),
-                        control_handle: char_write_handle,
-                        ..Default::default()
-                    },
-                    Characteristic {
-                        uuid: TX_CHAR_UUID,
-                        notify: Some(CharacteristicNotify {
-                            notify: true,
-                            indicate: true,
-                            method: CharacteristicNotifyMethod::Io,
-                            ..Default::default()
-                        }),
-                        control_handle: char_notify_handle,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let app_handle = adapter.serve_gatt_application(app).await?;
-        let token = CancellationToken::new();
-
-        let mut listeners = zasyncwrite!(self.listeners);
-        let task = {
-            let manager = self.manager.clone();
-            let token = token.clone();
-
-            let mut adapter_events = adapter.events().await?;
-            let mut characteristics_rx_mapping: HashMap<Address, CharacteristicReader> =
-                HashMap::new();
-            let mut characteristics_tx_mapping: HashMap<Address, CharacteristicWriter> =
-                HashMap::new();
-
-            async move {
-                // Make sure the handles we care about are kept alive
-                let _keep_alive = (app_handle, session);
-                let mut _adv_handle = Some(_adv_handle);
-
-                loop {
-                    tokio::select! {
-                        evt = adapter_events.next() => {
-                            // We can't rely on device added events because the device could've been
-                            // added before we created the listener. However, what we can do is to
-                            // remove keys if the device is removed (almost like a cleanup so that
-                            // we don't check the hashmaps of devices that are not even connected)
-                            if let Some(AdapterEvent::DeviceRemoved(address)) = evt {
-                                characteristics_rx_mapping.remove(&address);
-                                characteristics_tx_mapping.remove(&address);
-                            }
-                        }
-                        evt = char_write_control.next() => {
-                            match evt {
-                                Some(CharacteristicControlEvent::Write(req)) => {
-                                    tracing::debug!("Incoming write request from {}", req.device_address());
-                                    characteristics_rx_mapping.insert(req.device_address(), req.accept().unwrap());
-                                }
-                                None => (),
-                                // No other event is possible since we set up the characteristic to
-                                // be just write/write_no_response
-                                _ => unreachable!("Unexpected characteristic event"),
-                            }
-                        }
-                        evt = char_notify_control.next() => {
-                            match evt {
-                                Some(CharacteristicControlEvent::Notify(notifier)) => {
-                                    tracing::debug!("Incoming notify request from {}", notifier.device_address());
-                                    characteristics_tx_mapping.insert(notifier.device_address(), notifier);
-                                }
-                                None => (),
-                                // No other event is possible since we set up the characteristic to
-                                // be just notify
-                                _ => unreachable!("Unexpected characteristic event"),
-                            }
-                        }
-                        _ = token.cancelled() => break,
-                    }
-
-                    // Check if we have all the information to consider the link established. This
-                    // happens when we have: an active connection from a central + an active
-                    // subscription to our NUS TX Characteristic + data being written to our NUS RX
-                    // Characteristic
-                    let rx_addresses = characteristics_rx_mapping
-                        .keys()
-                        .cloned()
-                        .collect::<HashSet<Address>>();
-                    let tx_addresses = characteristics_tx_mapping
-                        .keys()
-                        .cloned()
-                        .collect::<HashSet<Address>>();
-                    let mut need_readvertise = false;
-                    for address in rx_addresses.intersection(&tx_addresses) {
-                        need_readvertise = true;
-                        let rx = characteristics_rx_mapping.remove(address).unwrap();
-                        let tx = characteristics_tx_mapping.remove(address).unwrap();
-                        let central = address.to_string();
-                        tracing::info!("Accepted connection from central {}", &central);
-
-                        // Signal the manager that we have got a new BLE link
-                        manager
-                            .send_async(LinkUnicast::from(Arc::new(LinkUnicastBtGatt::new(
-                                None,
-                                rx,
-                                tx,
-                                &local_address,
-                                &central,
-                                adapter.name().to_owned(),
-                            ))
-                                as Arc<dyn LinkUnicastTrait>))
-                            .await
-                            .unwrap();
-                    }
-
-                    // Resume explicitly advertising since BlueZ default behaviour is to stop
-                    // after a successful connection. To do this, drop the advertisement handle
-                    // that handled this connection, and advertise again using the same
-                    // parameters.
-                    if need_readvertise {
-                        std::mem::drop(
-                            _adv_handle.replace(adapter.advertise(le_advertisement.clone()).await?),
-                        );
-                    }
-                }
-
-                Ok(())
-            }
-        };
-
-        let acceptor_handle = zenoh_runtime::ZRuntime::Acceptor.spawn(task);
-
-        let key = endpoint.address().to_string();
-        let listener =
-            ListenerUnicastBtGatt::new(endpoint, locator.clone(), token, acceptor_handle);
-        listeners.insert(key, listener);
-
-        Ok(locator)
+        on_bt_runtime(listen(
+            self.manager.clone(),
+            self.listeners.clone(),
+            endpoint,
+        ))
+        .await
     }
 
     async fn del_listener(&self, endpoint: &EndPoint) -> ZResult<()> {
@@ -610,6 +435,229 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastBtGatt {
     async fn get_locators_noloopback(&self) -> Vec<Locator> {
         self.get_locators().await
     }
+}
+
+/// Creates a listener: advertises the Zenoh GATT service and accepts connections from centrals
+async fn listen(
+    manager: NewLinkChannelSender,
+    listeners: Arc<RwLock<HashMap<String, ListenerUnicastBtGatt>>>,
+    endpoint: EndPoint,
+) -> ZResult<Locator> {
+    let address: BtGattAddress = endpoint.address().as_str().parse()?;
+    let local_name = match address.target {
+        Target::Any => None,
+        Target::Name(name) if name.len() <= MAX_NAME_LEN => Some(name),
+        Target::Name(name) => bail!(
+            "Can not listen on {}: advertised name '{}' is longer than {} bytes",
+            endpoint,
+            name,
+            MAX_NAME_LEN
+        ),
+        Target::Address(_) => bail!(
+            "Can not listen on {}: a MAC address is not a valid listen address, use '{}' or a name",
+            endpoint,
+            ANY
+        ),
+    };
+
+    let session = bluer::Session::new().await?;
+
+    // Grab adapter
+    let adapter = if let Some(adapter) = &address.adapter {
+        session.adapter(adapter)?
+    } else {
+        session.default_adapter().await?
+    };
+
+    if !adapter.is_powered().await? {
+        adapter.set_powered(true).await?;
+    }
+
+    // Close pre-existing active advertising instances for a clean slate
+    if adapter.active_advertising_instances().await? > 0 {
+        adapter.set_discoverable(false).await?;
+    }
+
+    let local_address = adapter.address().await?.to_string();
+    let locator = Locator::new(BT_GATT_LOCATOR_PREFIX, &local_address, "")?;
+
+    tracing::info!(
+        "Adding new BLE listener on {} ({}), advertised name: {:?}",
+        adapter.name(),
+        local_address,
+        local_name
+    );
+
+    let le_advertisement = Advertisement {
+        advertisement_type: Type::Peripheral,
+        service_uuids: vec![SERVICE_UUID].into_iter().collect(),
+        discoverable: Some(true),
+        // BlueZ places the name in the scan response, not in the advertisement itself
+        local_name,
+        // We don't care about speed of visibility, so set min-max intervals to be quite large
+        // so that we have more radio time for actual existing connections.
+        min_interval: Some(Duration::from_millis(1500)),
+        max_interval: Some(Duration::from_millis(2000)),
+        // While it would be good to enable extended advertising (less conflicts with other BLE
+        // devices that might be present), it is not ideal as some BLE stacks might not support it
+        // and thus might not detect our presence.
+        // secondary_channel: Some(SecondaryChannel::TwoM),
+        ..Default::default()
+    };
+    let _adv_handle = adapter.advertise(le_advertisement.clone()).await?;
+
+    // Create GATT control application which will expose the Zenoh BLE Service for communication
+    let (mut char_write_control, char_write_handle) = characteristic_control();
+    let (mut char_notify_control, char_notify_handle) = characteristic_control();
+    let app = Application {
+        services: vec![Service {
+            uuid: SERVICE_UUID,
+            primary: true,
+            characteristics: vec![
+                Characteristic {
+                    uuid: RX_CHAR_UUID,
+                    write: Some(CharacteristicWrite {
+                        write: true,
+                        write_without_response: true,
+                        // TODO:
+                        // Try `CharacteristicWriteMethod::Fun` to see
+                        // if this work-arounds the bug where BlueZ disconnects
+                        // with ATT disconnect code 0x13 after ~ 8 seconds
+                        method: CharacteristicWriteMethod::Io,
+                        ..Default::default()
+                    }),
+                    control_handle: char_write_handle,
+                    ..Default::default()
+                },
+                Characteristic {
+                    uuid: TX_CHAR_UUID,
+                    notify: Some(CharacteristicNotify {
+                        notify: true,
+                        indicate: true,
+                        method: CharacteristicNotifyMethod::Io,
+                        ..Default::default()
+                    }),
+                    control_handle: char_notify_handle,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let app_handle = adapter.serve_gatt_application(app).await?;
+    let token = CancellationToken::new();
+
+    let mut listeners = zasyncwrite!(listeners);
+    let task = {
+        let manager = manager.clone();
+        let token = token.clone();
+
+        let mut adapter_events = adapter.events().await?;
+        let mut characteristics_rx_mapping: HashMap<Address, CharacteristicReader> = HashMap::new();
+        let mut characteristics_tx_mapping: HashMap<Address, CharacteristicWriter> = HashMap::new();
+
+        async move {
+            // Make sure the handles we care about are kept alive
+            let _keep_alive = (app_handle, session);
+            let mut _adv_handle = Some(_adv_handle);
+
+            loop {
+                tokio::select! {
+                    evt = adapter_events.next() => {
+                        // We can't rely on device added events because the device could've been
+                        // added before we created the listener. However, what we can do is to
+                        // remove keys if the device is removed (almost like a cleanup so that
+                        // we don't check the hashmaps of devices that are not even connected)
+                        if let Some(AdapterEvent::DeviceRemoved(address)) = evt {
+                            characteristics_rx_mapping.remove(&address);
+                            characteristics_tx_mapping.remove(&address);
+                        }
+                    }
+                    evt = char_write_control.next() => {
+                        match evt {
+                            Some(CharacteristicControlEvent::Write(req)) => {
+                                tracing::debug!("Incoming write request from {}", req.device_address());
+                                characteristics_rx_mapping.insert(req.device_address(), req.accept().unwrap());
+                            }
+                            None => (),
+                            // No other event is possible since we set up the characteristic to
+                            // be just write/write_no_response
+                            _ => unreachable!("Unexpected characteristic event"),
+                        }
+                    }
+                    evt = char_notify_control.next() => {
+                        match evt {
+                            Some(CharacteristicControlEvent::Notify(notifier)) => {
+                                tracing::debug!("Incoming notify request from {}", notifier.device_address());
+                                characteristics_tx_mapping.insert(notifier.device_address(), notifier);
+                            }
+                            None => (),
+                            // No other event is possible since we set up the characteristic to
+                            // be just notify
+                            _ => unreachable!("Unexpected characteristic event"),
+                        }
+                    }
+                    _ = token.cancelled() => break,
+                }
+
+                // Check if we have all the information to consider the link established. This
+                // happens when we have: an active connection from a central + an active
+                // subscription to our NUS TX Characteristic + data being written to our NUS RX
+                // Characteristic
+                let rx_addresses = characteristics_rx_mapping
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<Address>>();
+                let tx_addresses = characteristics_tx_mapping
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<Address>>();
+                let mut need_readvertise = false;
+                for address in rx_addresses.intersection(&tx_addresses) {
+                    need_readvertise = true;
+                    let rx = characteristics_rx_mapping.remove(address).unwrap();
+                    let tx = characteristics_tx_mapping.remove(address).unwrap();
+                    let central = address.to_string();
+                    tracing::info!("Accepted connection from central {}", &central);
+
+                    // Signal the manager that we have got a new BLE link
+                    manager
+                        .send_async(LinkUnicast::from(Arc::new(LinkUnicastBtGatt::new(
+                            None,
+                            rx,
+                            tx,
+                            &local_address,
+                            &central,
+                            adapter.name().to_owned(),
+                        ))
+                            as Arc<dyn LinkUnicastTrait>))
+                        .await
+                        .unwrap();
+                }
+
+                // Resume explicitly advertising since BlueZ default behaviour is to stop
+                // after a successful connection. To do this, drop the advertisement handle
+                // that handled this connection, and advertise again using the same
+                // parameters.
+                if need_readvertise {
+                    std::mem::drop(
+                        _adv_handle.replace(adapter.advertise(le_advertisement.clone()).await?),
+                    );
+                }
+            }
+
+            Ok(())
+        }
+    };
+
+    let acceptor_handle = tokio::spawn(task);
+
+    let key = endpoint.address().to_string();
+    let listener = ListenerUnicastBtGatt::new(endpoint, locator.clone(), token, acceptor_handle);
+    listeners.insert(key, listener);
+
+    Ok(locator)
 }
 
 /// Attempts to discover and connect to the requested BLE device
