@@ -225,6 +225,16 @@ impl Runtime {
 
         self.bind_listeners(&listeners).await?;
 
+        #[cfg(feature = "transport_iroh")]
+        let zone_set = self.config().lock().zone().is_some();
+        #[cfg(not(feature = "transport_iroh"))]
+        let zone_set = false;
+        // Before any scouting, so the zone races multicast instead of waiting behind it.
+        #[cfg(feature = "transport_iroh")]
+        if zone_set {
+            super::zone::start(self);
+        }
+
         if scouting {
             if listen || peers.is_empty() {
                 let ifaces = Runtime::get_interfaces(&ifaces);
@@ -244,8 +254,18 @@ impl Runtime {
                         bail!("Unable to bind UDP port to any multicast interface!")
                     } else {
                         if peers.is_empty() {
-                            self.connect_first(&sockets, autoconnect, &addr, timeout)
-                                .await?
+                            let scouted = self.connect_first(&sockets, autoconnect, &addr, timeout);
+                            if zone_set {
+                                // Either multicast or the zone may find someone first. A scouting
+                                // timeout is not fatal while the zone keeps looking.
+                                #[cfg(feature = "transport_iroh")]
+                                tokio::select! {
+                                    _ = scouted => {}
+                                    _ = self.wait_for_unicast_transport() => {}
+                                }
+                            } else {
+                                scouted.await?
+                            }
                         }
                         if let Some(mcast_socket) = mcast_socket {
                             let this = self.clone();
@@ -261,10 +281,27 @@ impl Runtime {
             } else {
                 Ok(())
             }
-        } else if peers.is_empty() {
+        } else if peers.is_empty() && !zone_set {
             bail!("No peer specified and multicast scouting deactivated!")
+        } else if peers.is_empty() {
+            #[cfg(feature = "transport_iroh")]
+            if tokio::time::timeout(timeout, self.wait_for_unicast_transport())
+                .await
+                .is_err()
+            {
+                tracing::warn!("No zone peer connected within the scouting timeout");
+            }
+            Ok(())
         } else {
             self.connect_peers(&peers, true).await
+        }
+    }
+
+    /// Resolves once this runtime has at least one unicast transport.
+    #[cfg(feature = "transport_iroh")]
+    async fn wait_for_unicast_transport(&self) {
+        while self.manager().get_transports_unicast().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -312,6 +349,9 @@ impl Runtime {
         );
 
         self.bind_listeners(&listeners).await?;
+
+        #[cfg(feature = "transport_iroh")]
+        super::zone::start(self);
 
         self.connect_peers(&peers, false).await?;
 
@@ -389,6 +429,9 @@ impl Runtime {
         );
 
         self.bind_listeners(&listeners).await?;
+
+        #[cfg(feature = "transport_iroh")]
+        super::zone::start(self);
 
         self.connect_peers(&peers, false).await?;
 

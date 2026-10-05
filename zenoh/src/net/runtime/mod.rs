@@ -23,6 +23,8 @@ pub(crate) mod interface_monitor;
 mod iroh_endpoint;
 pub mod orchestrator;
 mod region;
+#[cfg(feature = "transport_iroh")]
+mod zone;
 
 #[cfg(all(feature = "unstable", feature = "shared-memory"))]
 use std::future::IntoFuture;
@@ -1017,7 +1019,6 @@ impl Runtime {
     }
 
     #[cfg(feature = "transport_iroh")]
-    #[allow(dead_code)] // consumed by the zone discovery task
     pub(crate) fn iroh(&self) -> Option<&zenoh_link::iroh::IrohEndpoint> {
         self.state.iroh.as_ref()
     }
