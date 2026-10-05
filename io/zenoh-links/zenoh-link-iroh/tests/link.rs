@@ -62,7 +62,7 @@ async fn dial_by_id_and_exchange_bytes() {
     let (mb, _) = manager(b.clone());
 
     let locator = ma
-        .new_listener(EndPoint::from_str(&format!("iroh/{}", a.id())).unwrap())
+        .new_listener(EndPoint::from_str("iroh/auto").unwrap())
         .await
         .unwrap();
     assert_eq!(locator.to_string(), format!("iroh/{}", a.id()));
@@ -111,8 +111,13 @@ async fn listener_rejects_a_foreign_id_and_a_second_listener() {
     ma.new_listener(EndPoint::from_str(&format!("iroh/{}", a.id())).unwrap())
         .await
         .unwrap();
-    // An empty address is only expressible with metadata ("iroh/" alone is not a valid endpoint).
     assert!(ma
+        .new_listener(EndPoint::from_str("iroh/auto").unwrap())
+        .await
+        .is_err());
+    // An empty address (only expressible with metadata) is rejected too.
+    let (fresh, _) = manager(a.clone());
+    assert!(fresh
         .new_listener(EndPoint::from_str("iroh/?a=b").unwrap())
         .await
         .is_err());

@@ -31,6 +31,8 @@ pub use endpoint::{IrohEndpoint, IrohEndpointConfig};
 pub use unicast::*;
 
 pub const IROH_LOCATOR_PREFIX: &str = "iroh";
+/// Listen address meaning "this endpoint": iroh/auto.
+pub const IROH_LISTEN_AUTO: &str = "auto";
 /// ALPN spoken on every zenoh iroh connection.
 pub const ALPN: &[u8] = b"myrmic/1";
 /// Same constraint as the QUIC link: zenoh frames streamed batches with a 16-bit length.

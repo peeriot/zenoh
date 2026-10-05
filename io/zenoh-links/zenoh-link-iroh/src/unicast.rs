@@ -201,8 +201,11 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastIroh {
     async fn new_listener(&self, endpoint: EndPoint) -> ZResult<Locator> {
         let own = self.iroh.id();
         let addr = endpoint.address();
-        if !addr.as_str().is_empty() && addr.as_str() != own.to_string() {
-            bail!("iroh listener address must be empty or this endpoint's id ({own}), got {addr}");
+        if addr.as_str() != crate::IROH_LISTEN_AUTO && addr.as_str() != own.to_string() {
+            bail!(
+                "iroh listener address must be `{}` or this endpoint's id ({own}), got {addr}",
+                crate::IROH_LISTEN_AUTO
+            );
         }
         let mut guard = self.listener.lock().unwrap();
         if guard.is_some() {

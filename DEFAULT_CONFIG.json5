@@ -279,7 +279,7 @@
   // ///
   // /// Nodes with the same zone id find each other through an iroh-lighthouse server and
   // /// connect over the iroh network (`iroh/<endpoint-id>` links). Peers and routers listen on
-  // /// `iroh/` automatically and announce themselves; clients only look the zone up.
+  // /// `iroh/auto` automatically and announce themselves; clients only look the zone up.
   // ///
   // /// Shorthand: `zone: "my-zone"`. Full form:
   // zone: {
