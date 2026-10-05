@@ -65,7 +65,12 @@ tracing-instrument = [
   "zenoh-task/tracing-instrument",
 ]
 transport_compression = ["zenoh-transport/transport_compression"]
-transport_iroh = ["zenoh-link/transport_iroh", "zenoh-transport/transport_iroh"]
+transport_iroh = [
+  "dep:secrecy",
+  "zenoh-link/transport_iroh",
+  "zenoh-transport/transport_iroh",
+]
+transport_iroh_test = ["transport_iroh", "dep:iroh-lighthouse"]
 transport_multilink = ["zenoh-transport/transport_multilink"]
 transport_quic = ["zenoh-transport/transport_quic"]
 transport_quic_datagram = ["zenoh-transport/transport_quic_datagram"]
@@ -96,6 +101,7 @@ flate2 = { workspace = true }
 flume = { workspace = true }
 futures = { workspace = true }
 git-version = { workspace = true }
+iroh-lighthouse = { workspace = true, optional = true }
 itertools = { workspace = true }
 json5 = { workspace = true }
 lazy_static = { workspace = true }
@@ -104,6 +110,7 @@ once_cell = { workspace = true }
 petgraph = { workspace = true }
 phf = { workspace = true }
 rand = { workspace = true, features = ["default"] }
+secrecy = { workspace = true, optional = true }
 serde = { workspace = true, features = ["default"] }
 serde_json = { workspace = true }
 socket2 = { workspace = true }
@@ -160,6 +167,9 @@ name = "zenoh"
 # NOTE: if you change this, also change it in .github/workflows/ci.yml in "doc" job.
 [package.metadata.docs.rs]
 features = ["shared-memory", "unstable"]
+
+[package.metadata.cargo-machete]
+ignored = ["iroh-lighthouse"]
 
 [package.metadata.deb]
 assets = [{ source = "../README.md", dest = "README.md", mode = "644" }]

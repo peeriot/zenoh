@@ -2343,6 +2343,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroh-lighthouse"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bdeba71a33cc384380313c3d37ef2e548e77279014345647f8aa00177d24905"
+dependencies = [
+ "axum",
+ "clap",
+ "humantime",
+ "iroh",
+ "iroh-lighthouse-protocol",
+ "n0-future",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "iroh-lighthouse-client"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6883,6 +6903,7 @@ dependencies = [
  "flume",
  "futures",
  "git-version",
+ "iroh-lighthouse",
  "itertools 0.14.0",
  "json5",
  "lazy_static",
@@ -6895,6 +6916,7 @@ dependencies = [
  "rand 0.8.8",
  "regex",
  "rustc_version",
+ "secrecy",
  "serde",
  "serde_json",
  "socket2 0.5.10",

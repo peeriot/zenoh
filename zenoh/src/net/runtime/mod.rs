@@ -19,6 +19,8 @@
 //! [Click here for Zenoh's documentation](https://docs.rs/zenoh/latest/zenoh)
 mod adminspace;
 pub(crate) mod interface_monitor;
+#[cfg(feature = "transport_iroh")]
+mod iroh_endpoint;
 pub mod orchestrator;
 mod region;
 
@@ -184,6 +186,8 @@ pub(crate) struct RuntimeState {
     router: Arc<Gateway>,
     config: Notifier<ExpandedConfig>,
     manager: TransportManager,
+    #[cfg(feature = "transport_iroh")]
+    iroh: Option<zenoh_link::iroh::IrohEndpoint>,
     transport_handlers: std::sync::RwLock<Vec<Arc<dyn TransportEventHandler>>>,
     locators: std::sync::RwLock<Vec<Locator>>,
     locators_noloopback: std::sync::RwLock<Vec<Locator>>,
@@ -795,6 +799,9 @@ impl RuntimeBuilder {
             runtime: std::sync::RwLock::new(WeakRuntime { state: Weak::new() }),
         });
 
+        #[cfg(feature = "transport_iroh")]
+        let iroh = iroh_endpoint::bind_for(&config).await?;
+
         let transport_manager_builder = TransportManager::builder()
             .from_config(&config)
             .await?
@@ -803,6 +810,9 @@ impl RuntimeBuilder {
                 let config = config.clone();
                 move |p| region::compute_transient_bound_of(&p, &config)
             });
+
+        #[cfg(feature = "transport_iroh")]
+        let transport_manager_builder = transport_manager_builder.iroh_endpoint(iroh.clone());
 
         #[cfg(feature = "shared-memory")]
         let transport_manager_builder =
@@ -836,6 +846,8 @@ impl RuntimeBuilder {
                 router: gateway,
                 config,
                 manager: transport_manager,
+                #[cfg(feature = "transport_iroh")]
+                iroh,
                 transport_handlers: std::sync::RwLock::new(vec![]),
                 locators: std::sync::RwLock::new(vec![]),
                 locators_noloopback: std::sync::RwLock::new(vec![]),
@@ -1002,6 +1014,12 @@ impl Runtime {
 
     pub(crate) fn router(&self) -> Arc<Gateway> {
         self.state.router()
+    }
+
+    #[cfg(feature = "transport_iroh")]
+    #[allow(dead_code)] // consumed by the zone discovery task
+    pub(crate) fn iroh(&self) -> Option<&zenoh_link::iroh::IrohEndpoint> {
+        self.state.iroh.as_ref()
     }
 
     pub fn config(&self) -> &Notifier<ExpandedConfig> {
@@ -1352,6 +1370,10 @@ impl Closee for Arc<RuntimeState> {
         // TODO: Check this whether is able to terminate all spawned task by Runtime::spawn
         self.task_controller.terminate_all_async().await;
         self.manager.close().await;
+        #[cfg(feature = "transport_iroh")]
+        if let Some(iroh) = &self.iroh {
+            iroh.close().await;
+        }
         // clean up to break cyclic reference of self.state to itself
         self.transport_handlers.write().unwrap().clear();
         // TODO: the call below is needed to prevent intermittent leak

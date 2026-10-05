@@ -184,6 +184,12 @@ impl Runtime {
     }
 
     pub async fn start(&mut self) -> ZResult<()> {
+        #[cfg(not(feature = "transport_iroh"))]
+        if self.config().lock().zone().is_some() {
+            tracing::warn!(
+                "zone is configured but zenoh was built without the transport_iroh feature; ignoring it"
+            );
+        }
         match self.whatami() {
             WhatAmI::Client => self.start_client().await,
             WhatAmI::Peer => self.start_peer().await,
@@ -299,6 +305,12 @@ impl Runtime {
             )
         };
 
+        #[cfg(feature = "transport_iroh")]
+        let listeners = super::iroh_endpoint::with_zone_listener(
+            listeners,
+            self.config().lock().zone().is_some(),
+        );
+
         self.bind_listeners(&listeners).await?;
 
         self.connect_peers(&peers, false).await?;
@@ -369,6 +381,12 @@ impl Runtime {
                 ),
             )
         };
+
+        #[cfg(feature = "transport_iroh")]
+        let listeners = super::iroh_endpoint::with_zone_listener(
+            listeners,
+            self.config().lock().zone().is_some(),
+        );
 
         self.bind_listeners(&listeners).await?;
 
