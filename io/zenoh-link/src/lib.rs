@@ -27,6 +27,12 @@ use zenoh_link_bt_gatt::{
     BtGattLocatorInspector, LinkManagerUnicastBtGatt, BT_GATT_LOCATOR_PREFIX,
 };
 pub use zenoh_link_commons::*;
+#[cfg(feature = "transport_iroh")]
+pub use zenoh_link_iroh as iroh;
+#[cfg(feature = "transport_iroh")]
+use zenoh_link_iroh::{
+    IrohEndpoint, IrohLocatorInspector, LinkManagerUnicastIroh, IROH_LOCATOR_PREFIX,
+};
 #[cfg(feature = "transport_quic")]
 pub use zenoh_link_quic as quic;
 #[cfg(feature = "transport_quic")]
@@ -100,6 +106,8 @@ pub enum LinkKind {
     Vscock,
     Ws,
     BtGatt,
+    #[cfg(feature = "transport_iroh")]
+    Iroh,
 }
 
 impl LinkKind {
@@ -135,6 +143,8 @@ impl LinkKind {
                 UNIXPIPE_LOCATOR_PREFIX => supported_links.push(LinkKind::Unixpipe),
                 #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
                 VSOCK_LOCATOR_PREFIX => supported_links.push(LinkKind::Vscock),
+                #[cfg(feature = "transport_iroh")]
+                IROH_LOCATOR_PREFIX => supported_links.push(LinkKind::Iroh),
                 _ => {}
             }
         }
@@ -191,6 +201,8 @@ impl TryFrom<&Locator> for LinkKind {
             UNIXPIPE_LOCATOR_PREFIX => Ok(LinkKind::Unixpipe),
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
             VSOCK_LOCATOR_PREFIX => Ok(LinkKind::Vscock),
+            #[cfg(feature = "transport_iroh")]
+            IROH_LOCATOR_PREFIX => Ok(LinkKind::Iroh),
             _ => bail!(
                 "Unicast not supported for {} protocol",
                 locator.protocol().as_str()
@@ -230,6 +242,8 @@ pub const ALL_SUPPORTED_LINKS: &[LinkKind] = &[
     LinkKind::Unixpipe,
     #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
     LinkKind::Vscock,
+    #[cfg(feature = "transport_iroh")]
+    LinkKind::Iroh,
 ];
 
 #[derive(Default, Clone)]
@@ -256,6 +270,8 @@ pub struct LocatorInspector {
     unixpipe_inspector: UnixPipeLocatorInspector,
     #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
     vsock_inspector: VsockLocatorInspector,
+    #[cfg(feature = "transport_iroh")]
+    iroh_inspector: IrohLocatorInspector,
 }
 
 impl fmt::Debug for LocatorInspector {
@@ -291,6 +307,8 @@ impl LocatorInspector {
             LinkKind::Unixpipe => self.unixpipe_inspector.is_reliable(locator),
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
             LinkKind::Vscock => self.vsock_inspector.is_reliable(locator),
+            #[cfg(feature = "transport_iroh")]
+            LinkKind::Iroh => self.iroh_inspector.is_reliable(locator),
             #[allow(unreachable_patterns)]
             _ => unreachable!(),
         }
@@ -322,6 +340,8 @@ impl LocatorInspector {
             LinkKind::Unixpipe => self.unixpipe_inspector.is_multicast(locator).await,
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
             LinkKind::Vscock => self.vsock_inspector.is_multicast(locator).await,
+            #[cfg(feature = "transport_iroh")]
+            LinkKind::Iroh => self.iroh_inspector.is_multicast(locator).await,
             #[allow(unreachable_patterns)]
             _ => unreachable!(),
         }
@@ -407,6 +427,7 @@ impl LinkManagerBuilderUnicast {
     pub fn make(
         _manager: NewLinkChannelSender,
         endpoint: &EndPoint,
+        #[cfg(feature = "transport_iroh")] iroh: Option<&IrohEndpoint>,
     ) -> ZResult<LinkManagerUnicast> {
         #[allow(unused_imports)]
         use zenoh_link_commons::LocatorInspector;
@@ -437,6 +458,15 @@ impl LinkManagerBuilderUnicast {
             LinkKind::Unixpipe => Ok(std::sync::Arc::new(LinkManagerUnicastPipe::new(_manager))),
             #[cfg(all(feature = "transport_vsock", target_os = "linux"))]
             LinkKind::Vscock => Ok(std::sync::Arc::new(LinkManagerUnicastVsock::new(_manager))),
+            #[cfg(feature = "transport_iroh")]
+            LinkKind::Iroh => {
+                let iroh =
+                    iroh.ok_or_else(|| zenoh_result::zerror!("iroh endpoint not configured"))?;
+                Ok(std::sync::Arc::new(LinkManagerUnicastIroh::new(
+                    _manager,
+                    iroh.clone(),
+                )))
+            }
             #[allow(unreachable_patterns)]
             _ => unreachable!(),
         }

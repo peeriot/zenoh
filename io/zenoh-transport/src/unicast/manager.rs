@@ -394,8 +394,12 @@ impl TransportManager {
         if let Some(lm) = w_guard.get(&key) {
             Ok(lm.clone())
         } else {
-            let lm =
-                LinkManagerBuilderUnicast::make(self.new_unicast_link_sender.clone(), endpoint)?;
+            let lm = LinkManagerBuilderUnicast::make(
+                self.new_unicast_link_sender.clone(),
+                endpoint,
+                #[cfg(feature = "transport_iroh")]
+                self.config.iroh_endpoint.as_ref(),
+            )?;
             w_guard.insert(key, lm.clone());
             Ok(lm)
         }

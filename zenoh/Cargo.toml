@@ -65,6 +65,7 @@ tracing-instrument = [
   "zenoh-task/tracing-instrument",
 ]
 transport_compression = ["zenoh-transport/transport_compression"]
+transport_iroh = ["zenoh-link/transport_iroh", "zenoh-transport/transport_iroh"]
 transport_multilink = ["zenoh-transport/transport_multilink"]
 transport_quic = ["zenoh-transport/transport_quic"]
 transport_quic_datagram = ["zenoh-transport/transport_quic_datagram"]
@@ -106,7 +107,7 @@ rand = { workspace = true, features = ["default"] }
 serde = { workspace = true, features = ["default"] }
 serde_json = { workspace = true }
 socket2 = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 uhlc = { workspace = true, features = ["default"] }

@@ -7100,6 +7100,7 @@ dependencies = [
  "zenoh-config",
  "zenoh-link-bt-gatt",
  "zenoh-link-commons",
+ "zenoh-link-iroh",
  "zenoh-link-quic",
  "zenoh-link-quic_datagram",
  "zenoh-link-serial",

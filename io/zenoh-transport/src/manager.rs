@@ -143,6 +143,8 @@ pub struct TransportManagerConfig {
     pub supported_links: Vec<LinkKind>,
     pub bound_callback: Option<RemoteBoundCallback>,
     pub region_name: Option<RegionName>,
+    #[cfg(feature = "transport_iroh")]
+    pub iroh_endpoint: Option<zenoh_link::iroh::IrohEndpoint>,
 }
 
 impl fmt::Debug for TransportManagerConfig {
@@ -245,6 +247,8 @@ pub struct TransportManagerBuilder {
     tx_threads: usize,
     supported_links: Option<Vec<LinkKind>>,
     region_name: Option<RegionName>,
+    #[cfg(feature = "transport_iroh")]
+    iroh_endpoint: Option<zenoh_link::iroh::IrohEndpoint>,
     bound_callback: Option<RemoteBoundCallback>,
     #[cfg(feature = "shared-memory")]
     shm: zenoh_config::ShmConf,
@@ -398,6 +402,12 @@ impl TransportManagerBuilder {
         self
     }
 
+    #[cfg(feature = "transport_iroh")]
+    pub fn iroh_endpoint(mut self, iroh_endpoint: Option<zenoh_link::iroh::IrohEndpoint>) -> Self {
+        self.iroh_endpoint = iroh_endpoint;
+        self
+    }
+
     pub fn region_name(mut self, region_name: Option<RegionName>) -> Self {
         self.region_name = region_name;
         self
@@ -516,6 +526,8 @@ impl TransportManagerBuilder {
                 .unwrap_or_else(|| zenoh_link::ALL_SUPPORTED_LINKS.to_vec()),
             bound_callback: self.bound_callback,
             region_name: self.region_name,
+            #[cfg(feature = "transport_iroh")]
+            iroh_endpoint: self.iroh_endpoint,
         };
 
         if cfg!(feature = "uring")
@@ -612,6 +624,8 @@ impl Default for TransportManagerBuilder {
             tx_threads: 1,
             supported_links: None,
             region_name: None,
+            #[cfg(feature = "transport_iroh")]
+            iroh_endpoint: None,
             bound_callback: None,
             #[cfg(feature = "shared-memory")]
             shm: zenoh_config::ShmConf::default(),
