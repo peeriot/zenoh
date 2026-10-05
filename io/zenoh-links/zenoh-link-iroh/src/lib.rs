@@ -28,14 +28,12 @@ mod endpoint;
 mod unicast;
 
 pub use endpoint::{IrohEndpoint, IrohEndpointConfig};
-#[allow(unused_imports)] // empty until Task 3; remove the allow there
 pub use unicast::*;
 
 pub const IROH_LOCATOR_PREFIX: &str = "iroh";
 /// ALPN spoken on every zenoh iroh connection.
 pub const ALPN: &[u8] = b"myrmic/1";
 /// Same constraint as the QUIC link: zenoh frames streamed batches with a 16-bit length.
-#[allow(dead_code)] // used from Task 3 on; remove the allow there
 const IROH_MAX_MTU: BatchSize = BatchSize::MAX;
 const KEY_CONTEXT: &str = "zenoh-link-iroh/v1/secret-key";
 

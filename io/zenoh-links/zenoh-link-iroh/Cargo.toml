@@ -43,3 +43,4 @@ zenoh-runtime = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+flume = { workspace = true }

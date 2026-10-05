@@ -7174,6 +7174,7 @@ version = "1.10.1"
 dependencies = [
  "async-trait",
  "blake3",
+ "flume",
  "iroh",
  "iroh-lighthouse-client",
  "tokio",
