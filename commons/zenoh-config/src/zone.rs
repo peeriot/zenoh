@@ -22,10 +22,16 @@ pub const DEFAULT_TOPIC: &str = "myrmic/zone";
 /// Lighthouse used when `zone.lighthouse` is not set.
 pub const DEFAULT_LIGHTHOUSE: &str = "iroh.ichor.io";
 
-/// A non-empty zone id. It is the lighthouse topic secret.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A non-empty zone id. It is the lighthouse topic secret, so `Debug` redacts it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ZoneId(String);
+
+impl std::fmt::Debug for ZoneId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ZoneId(<redacted>)")
+    }
+}
 
 impl TryFrom<String> for ZoneId {
     type Error = &'static str;
@@ -156,12 +162,20 @@ mod tests {
         assert!(Config::default().zone().is_none());
     }
 
-    /// Only `Debug` is redacted. Serde output (config JSON, admin space) still holds the key.
+    /// Only `Debug` is redacted. Serde output (config JSON, admin space) still holds the key and
+    /// the zone id (the topic secret).
     #[test]
     fn secret_key_is_not_printed() {
         let mut c = Config::default();
-        c.insert_json5("zone", r#"{ id: "z", secret_key: "topsecret" }"#)
+        c.insert_json5("zone", r#"{ id: "zoneid42", secret_key: "topsecret" }"#)
             .unwrap();
-        assert!(!format!("{c:?}").contains("topsecret"));
+        let printed = format!("{c:?}");
+        assert!(!printed.contains("topsecret"), "{printed}");
+        assert!(!printed.contains("zoneid42"), "{printed}");
+        assert!(printed.contains("ZoneId(<redacted>)"), "{printed}");
+        c.insert_json5("zone", r#""zoneid42""#).unwrap();
+        let printed = format!("{c:?}");
+        assert!(!printed.contains("zoneid42"), "{printed}");
+        assert!(printed.contains("ZoneId(<redacted>)"), "{printed}");
     }
 }
