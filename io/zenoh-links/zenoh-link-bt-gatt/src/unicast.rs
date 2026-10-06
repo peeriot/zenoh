@@ -232,6 +232,7 @@ impl<R: GattCharRead, W: GattCharWrite> LinkUnicastTrait for LinkUnicastBtGatt<R
                 let len = Self::read(reader, buffer).await?;
 
                 if len == 0 && !buffer.is_empty() {
+                    tracing::info!("BT GATT link {} closed", self);
                     Err(zerror!("End Of Life for {}", self.src_locator).into())
                 } else {
                     Ok(len)
@@ -504,7 +505,9 @@ async fn listen(
         // secondary_channel: Some(SecondaryChannel::TwoM),
         ..Default::default()
     };
-    let _adv_handle = adapter.advertise(le_advertisement.clone()).await?;
+    // NOTE: The advertisement is registered once and kept for the lifetime of the listener.
+    // The kernel keeps advertising it while centrals are connected and after they disconnect.
+    let adv_handle = adapter.advertise(le_advertisement).await?;
 
     // Create GATT control application which will expose the Zenoh BLE Service for communication
     let (mut char_write_control, char_write_handle) = characteristic_control();
@@ -559,8 +562,7 @@ async fn listen(
 
         async move {
             // Make sure the handles we care about are kept alive
-            let _keep_alive = (app_handle, session);
-            let mut _adv_handle = Some(_adv_handle);
+            let _keep_alive = (app_handle, adv_handle, session);
 
             loop {
                 tokio::select! {
@@ -613,9 +615,7 @@ async fn listen(
                     .keys()
                     .cloned()
                     .collect::<HashSet<Address>>();
-                let mut need_readvertise = false;
                 for address in rx_addresses.intersection(&tx_addresses) {
-                    need_readvertise = true;
                     let rx = characteristics_rx_mapping.remove(address).unwrap();
                     let tx = characteristics_tx_mapping.remove(address).unwrap();
                     let central = address.to_string();
@@ -634,16 +634,6 @@ async fn listen(
                             as Arc<dyn LinkUnicastTrait>))
                         .await
                         .unwrap();
-                }
-
-                // Resume explicitly advertising since BlueZ default behaviour is to stop
-                // after a successful connection. To do this, drop the advertisement handle
-                // that handled this connection, and advertise again using the same
-                // parameters.
-                if need_readvertise {
-                    std::mem::drop(
-                        _adv_handle.replace(adapter.advertise(le_advertisement.clone()).await?),
-                    );
                 }
             }
 
