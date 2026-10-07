@@ -3,6 +3,22 @@
 //! This crate is intended for Zenoh's internal use.
 //!
 //! [Click here for Zenoh's documentation](../zenoh/index.html)
+//!
+//! # Addressing
+//!
+//! Endpoints have the form `bt_gatt/[<adapter>@]<target>`, where `<adapter>` is a BlueZ adapter
+//! name (e.g. `hci1`, the default adapter when omitted). A peer always has to expose the Zenoh
+//! GATT service, whatever the target:
+//!
+//! | `<target>`                    | connect                         | listen                          |
+//! |-------------------------------|---------------------------------|---------------------------------|
+//! | `[::]`                        | first device found              | advertise without a name        |
+//! | MAC (`AA:BB:CC:DD:EE:FF`)     | the device with that address    | invalid                         |
+//! | anything else                 | device advertising that name    | advertise that name (≤ 29 bytes)|
+//!
+//! A listener reports `bt_gatt/<adapter MAC>` as its locator, so that peers learning it
+//! (e.g. through scouting) can connect to exactly this node.
+mod addr;
 mod unicast;
 
 use std::str::FromStr;
