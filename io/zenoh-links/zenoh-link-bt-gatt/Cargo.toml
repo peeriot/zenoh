@@ -25,4 +25,3 @@ zenoh-link-commons = { workspace = true }
 zenoh-protocol = { workspace = true }
 zenoh-sync = { workspace = true }
 zenoh-result = { workspace = true }
-zenoh-runtime = { workspace = true }
