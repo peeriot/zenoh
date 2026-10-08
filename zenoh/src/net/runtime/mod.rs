@@ -55,7 +55,7 @@ use zenoh_core::polyfill::*;
 #[cfg(all(feature = "unstable", feature = "shared-memory"))]
 use zenoh_core::{Resolvable, Wait};
 use zenoh_keyexpr::OwnedNonWildKeyExpr;
-use zenoh_link::EndPoint;
+use zenoh_link::{EndPoint, LinkAuthenticator};
 use zenoh_plugin_trait::{PluginStartArgs, StructVersion};
 use zenoh_protocol::{
     core::{Locator, Region, WhatAmI, ZenohIdProto},
@@ -659,6 +659,7 @@ impl WeakRuntime {
 
 pub struct RuntimeBuilder {
     config: zenoh_config::ExpandedConfig,
+    link_authenticator: Option<Arc<dyn LinkAuthenticator>>,
     #[cfg(feature = "plugins")]
     plugins_manager: Option<PluginsManager>,
     #[cfg(feature = "shared-memory")]
@@ -697,6 +698,7 @@ impl RuntimeBuilder {
     pub fn new(config: Config) -> Self {
         Self {
             config: config.0.expanded(),
+            link_authenticator: None,
             #[cfg(feature = "plugins")]
             plugins_manager: None,
             #[cfg(feature = "shared-memory")]
@@ -708,6 +710,13 @@ impl RuntimeBuilder {
             #[cfg(test)]
             disable_async_tree_computation: false,
         }
+    }
+
+    /// Authenticate each new `tls/` link with `authenticator` before the
+    /// runtime's transports use it.
+    pub fn link_authenticator(mut self, authenticator: Arc<dyn LinkAuthenticator>) -> Self {
+        self.link_authenticator = Some(authenticator);
+        self
     }
 
     #[cfg(all(feature = "plugins", feature = "internal"))]
@@ -745,6 +754,7 @@ impl RuntimeBuilder {
     pub async fn build(self) -> ZResult<Runtime> {
         let RuntimeBuilder {
             config,
+            link_authenticator,
             #[cfg(feature = "plugins")]
             mut plugins_manager,
             #[cfg(feature = "shared-memory")]
@@ -803,6 +813,10 @@ impl RuntimeBuilder {
                 let config = config.clone();
                 move |p| region::compute_transient_bound_of(&p, &config)
             });
+        let transport_manager_builder = match link_authenticator {
+            Some(authenticator) => transport_manager_builder.link_authenticator(authenticator),
+            None => transport_manager_builder,
+        };
 
         #[cfg(feature = "shared-memory")]
         let transport_manager_builder =
@@ -1202,11 +1216,11 @@ impl TransportEventHandler for RuntimeTransportEventHandler {
         match zread!(self.runtime).upgrade().as_ref() {
             Some(runtime) => {
                 let _span = runtime.state.span.enter();
-                let slave_handlers: Vec<Arc<dyn TransportMulticastEventHandler>> =
-                    zread!(runtime.state.transport_handlers)
-                        .iter()
-                        .filter_map(|handler| handler.new_multicast(transport.clone()).ok())
-                        .collect();
+                // A handler's refusal refuses the transport.
+                let slave_handlers = zread!(runtime.state.transport_handlers)
+                    .iter()
+                    .map(|handler| handler.new_multicast(transport.clone()))
+                    .collect::<ZResult<Vec<Arc<dyn TransportMulticastEventHandler>>>>()?;
 
                 let region = region::compute_multicast_region(&runtime.config().lock())?;
 

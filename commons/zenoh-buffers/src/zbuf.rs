@@ -301,6 +301,10 @@ impl Reader for ZBufReader<'_> {
         let slice = self.inner.slices.get(self.cursor.slice).ok_or(DidntRead)?;
         match (slice.len() - self.cursor.byte).cmp(&len) {
             cmp::Ordering::Less => {
+                // A length above what is left sizes no allocation.
+                if Reader::remaining(self) < len {
+                    return Err(DidntRead);
+                }
                 let mut buffer = crate::vec::uninit(len);
                 Reader::read_exact(self, &mut buffer)?;
                 Ok(buffer.into())

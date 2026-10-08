@@ -36,8 +36,8 @@ use zenoh_core::{bail, zasynclock};
 use zenoh_link_commons::{
     get_ip_interface_names,
     tls::expiration::{LinkCertExpirationManager, LinkWithCertExpiration},
-    LinkAuthId, LinkManagerUnicastTrait, LinkUnicast, LinkUnicastTrait, ListenersUnicastIP,
-    NewLinkChannelSender, BIND_INTERFACE, BIND_SOCKET,
+    LinkAuthId, LinkAuthenticator, LinkManagerUnicastTrait, LinkSide, LinkUnicast,
+    LinkUnicastTrait, ListenersUnicastIP, NewLinkChannelSender, BIND_INTERFACE, BIND_SOCKET,
 };
 use zenoh_protocol::{
     core::{EndPoint, Locator, Priority},
@@ -156,6 +156,23 @@ impl LinkUnicastTls {
     #[allow(clippy::mut_from_ref)]
     fn get_mut_socket(&self) -> &mut TlsStream<TcpStream> {
         unsafe { &mut *self.inner.get() }
+    }
+
+    /// Mark a link the authenticator refused: with a zero linger its drop
+    /// resets the connection at once. Otherwise the drop waits up to
+    /// `TLS_LINGER_TIMEOUT` on the worker that drops it, for a peer that stops
+    /// reading to acknowledge what is unsent. Nothing unsent matters here.
+    fn refuse(&self) {
+        let (tcp_stream, _) = self.get_mut_socket().get_ref();
+        // Deprecated for the blocking close a positive linger brings.
+        #[allow(deprecated)]
+        if let Err(err) = tcp_stream.set_linger(Some(Duration::ZERO)) {
+            tracing::warn!(
+                "Unable to reset LINGER on refused TLS link {}: {}",
+                self,
+                err
+            );
+        }
     }
 
     async fn close(&self) -> ZResult<()> {
@@ -283,6 +300,25 @@ impl LinkWithCertExpiration for LinkUnicastTls {
     }
 }
 
+/// Resets a link when dropped before its authenticator admitted it: on a
+/// refusal, and when the caller cancels the authentication, as zenoh's open
+/// timeout does.
+struct ResetUnlessAdmitted(Option<Arc<LinkUnicastTls>>);
+
+impl ResetUnlessAdmitted {
+    fn admitted(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ResetUnlessAdmitted {
+    fn drop(&mut self) {
+        if let Some(link) = self.0.take() {
+            link.refuse();
+        }
+    }
+}
+
 impl Drop for LinkUnicastTls {
     fn drop(&mut self) {
         // Close the underlying TCP stream
@@ -311,6 +347,7 @@ impl fmt::Debug for LinkUnicastTls {
 pub struct LinkManagerUnicastTls {
     manager: NewLinkChannelSender,
     listeners: ListenersUnicastIP,
+    authenticator: Option<Arc<dyn LinkAuthenticator>>,
 }
 
 impl fmt::Debug for LinkManagerUnicastTls {
@@ -323,10 +360,16 @@ impl fmt::Debug for LinkManagerUnicastTls {
 }
 
 impl LinkManagerUnicastTls {
-    pub fn new(manager: NewLinkChannelSender) -> Self {
+    /// With an `authenticator`, each new link reaches the transport only once
+    /// it admits the link.
+    pub fn new(
+        manager: NewLinkChannelSender,
+        authenticator: Option<Arc<dyn LinkAuthenticator>>,
+    ) -> Self {
         Self {
             manager,
             listeners: ListenersUnicastIP::new(),
+            authenticator,
         }
     }
 }
@@ -385,6 +428,11 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
         let auth_identifier = get_server_cert_common_name(tls_conn)?;
         let certchain_expiration_time = get_cert_chain_expiration(&tls_conn.peer_certificates())?
             .expect("server should have certificate chain");
+        let peer_certificates = self
+            .authenticator
+            .as_ref()
+            .map(|_| der_chain(tls_conn.peer_certificates()))
+            .unwrap_or_default();
 
         let tls_stream = TlsStream::Client(tls_stream);
 
@@ -409,7 +457,19 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
             )
         });
 
-        Ok(LinkUnicast::from(link as Arc<dyn LinkUnicastTrait>))
+        let tls = link.clone();
+        let link = LinkUnicast(link);
+        if let Some(authenticator) = &self.authenticator {
+            // A refusal resets the link, and so does the open timeout that
+            // cancels this future before a verdict.
+            let pending = ResetUnlessAdmitted(Some(tls));
+            authenticator
+                .authenticate(&link, &peer_certificates, LinkSide::Connect)
+                .await
+                .map_err(|e| zerror!("TLS link {link} refused: {e}"))?;
+            pending.admitted();
+        }
+        Ok(link)
     }
 
     async fn new_listener(&self, endpoint: EndPoint) -> ZResult<Locator> {
@@ -439,6 +499,7 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
             let acceptor = TlsAcceptor::from(Arc::new(tls_server_config.server_config));
             let token = token.clone();
             let manager = self.manager.clone();
+            let authenticator = self.authenticator.clone();
 
             async move {
                 accept_task(
@@ -448,6 +509,7 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
                     manager,
                     tls_server_config.tls_handshake_timeout,
                     tls_server_config.tls_close_link_on_expiration,
+                    authenticator,
                 )
                 .await
             }
@@ -500,6 +562,7 @@ async fn accept_task(
     manager: NewLinkChannelSender,
     tls_handshake_timeout: Duration,
     tls_close_link_on_expiration: bool,
+    authenticator: Option<Arc<dyn LinkAuthenticator>>,
 ) -> ZResult<()> {
     let src_addr = socket.local_addr().map_err(|e| {
         let e = zerror!("Can not accept TLS connections: {}", e);
@@ -555,6 +618,11 @@ async fn accept_task(
                             }
                         }
 
+                        let peer_certificates = authenticator
+                            .as_ref()
+                            .map(|_| der_chain(tls_conn.peer_certificates()))
+                            .unwrap_or_default();
+
                         tracing::debug!("Accepted TLS connection on {:?}: {:?}. {:?}.", src_addr, dst_addr, auth_identifier);
                         // Create the new link object
                         let link = Arc::<LinkUnicastTls>::new_cyclic(|weak_link| {
@@ -578,13 +646,33 @@ async fn accept_task(
                             )
                         });
 
-                        // Communicate the new link to the initial transport manager
-                        if let Err(e) = manager
-                            .send_async(LinkUnicast::from(link as Arc<dyn LinkUnicastTrait>))
-                            .await
-                        {
-                            tracing::error!("{}-{}: {}", file!(), line!(), e)
+                        match &authenticator {
+                            None => forward(&manager, LinkUnicast(link)).await,
+                            // A task per link: a slow authentication holds up
+                            // no other handshake or accept.
+                            Some(authenticator) => {
+                                let (authenticator, manager) = (authenticator.clone(), manager.clone());
+                                zenoh_runtime::ZRuntime::Acceptor.spawn(async move {
+                                    let pending = ResetUnlessAdmitted(Some(link.clone()));
+                                    let link = LinkUnicast(link);
+                                    match authenticator
+                                        .authenticate(&link, &peer_certificates, LinkSide::Accept)
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            pending.admitted();
+                                            forward(&manager, link).await;
+                                        }
+                                        Err(e) => tracing::debug!("TLS link {link} refused: {e}"),
+                                    }
+                                });
+                            }
                         }
+                    }
+                    // One peer's failed handshake: the next accept waits for nothing.
+                    Err(e @ (tls_listener::Error::TlsAcceptError { .. }
+                    | tls_listener::Error::HandshakeTimeout { .. })) => {
+                        tracing::warn!("TLS handshake failed: {e}");
                     }
                     Err(e) => {
                         tracing::warn!("{}. Hint: increase the system open file limit.", e);
@@ -602,6 +690,22 @@ async fn accept_task(
     }
 
     Ok(())
+}
+
+/// Communicate a new link to the initial transport manager.
+async fn forward(manager: &NewLinkChannelSender, link: LinkUnicast) {
+    if let Err(e) = manager.send_async(link).await {
+        tracing::error!("{}-{}: {}", file!(), line!(), e)
+    }
+}
+
+/// The chain the handshake verified, DER, leaf first, for the authenticator.
+fn der_chain(certificates: Option<&[rustls_pki_types::CertificateDer]>) -> Vec<Vec<u8>> {
+    certificates
+        .unwrap_or_default()
+        .iter()
+        .map(|certificate| certificate.to_vec())
+        .collect()
 }
 
 fn get_client_cert_common_name(tls_conn: &rustls::CommonState) -> ZResult<TlsAuthId> {

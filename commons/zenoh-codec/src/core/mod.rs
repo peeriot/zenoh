@@ -122,7 +122,9 @@ macro_rules! vec_impl {
             #[allow(clippy::uninit_vec)]
             fn read(self, reader: &mut R) -> Result<Vec<u8>, Self::Error> {
                 let len: usize = self.read(&mut *reader)?;
-                if reader.remaining() < len {
+                // A length above what is left is malformed, and sizes no
+                // allocation.
+                if len > reader.remaining() {
                     return Err(DidntRead);
                 }
                 let mut buff = zenoh_buffers::vec::uninit(len);
