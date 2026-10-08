@@ -37,7 +37,8 @@ use zenoh_link_commons::{
     get_ip_interface_names,
     tls::expiration::{LinkCertExpirationManager, LinkWithCertExpiration},
     LinkAuthId, LinkAuthenticator, LinkManagerUnicastTrait, LinkSide, LinkUnicast,
-    LinkUnicastTrait, ListenersUnicastIP, NewLinkChannelSender, BIND_INTERFACE, BIND_SOCKET,
+    LinkUnicastTrait, ListenersUnicastIP, NewLink, NewLinkChannelSender, BIND_INTERFACE,
+    BIND_SOCKET,
 };
 use zenoh_protocol::{
     core::{EndPoint, Locator, Priority},
@@ -458,7 +459,7 @@ impl LinkManagerUnicastTrait for LinkManagerUnicastTls {
         });
 
         let tls = link.clone();
-        let link = LinkUnicast(link);
+        let link = LinkUnicast(NewLink::Single(link));
         if let Some(authenticator) = &self.authenticator {
             // A refusal resets the link, and so does the open timeout that
             // cancels this future before a verdict.
@@ -647,14 +648,14 @@ async fn accept_task(
                         });
 
                         match &authenticator {
-                            None => forward(&manager, LinkUnicast(link)).await,
+                            None => forward(&manager, LinkUnicast(NewLink::Single(link))).await,
                             // A task per link: a slow authentication holds up
                             // no other handshake or accept.
                             Some(authenticator) => {
                                 let (authenticator, manager) = (authenticator.clone(), manager.clone());
                                 zenoh_runtime::ZRuntime::Acceptor.spawn(async move {
                                     let pending = ResetUnlessAdmitted(Some(link.clone()));
-                                    let link = LinkUnicast(link);
+                                    let link = LinkUnicast(NewLink::Single(link));
                                     match authenticator
                                         .authenticate(&link, &peer_certificates, LinkSide::Accept)
                                         .await
