@@ -83,6 +83,8 @@ use crate::core::{Locator, WhatAmI, ZenohIdProto};
 /// +---------------+
 /// ~   <utf8;z8>   ~ if Flag(L)==1 -- List of locators
 /// +---------------+
+/// ~  [HelloExts]  ~ if Flag(Z)==1
+/// +---------------+
 ///
 /// (*) WhatAmI. It indicates the role of the zenoh node sending the HELLO message.
 ///    The valid WhatAmI values are:
@@ -105,6 +107,18 @@ pub struct HelloProto {
     pub whatami: WhatAmI,
     pub zid: ZenohIdProto,
     pub locators: Vec<Locator>,
+    pub ext_tag: Option<ext::Tag>,
+}
+
+// Extensions
+pub mod ext {
+    use crate::zextzbuf;
+
+    /// # Tag extension
+    /// The scouting tag of the sender. A node configured with a tag acts only on
+    /// Hellos that carry the same tag. Non-mandatory: a node that does not know
+    /// the extension skips it. See [`crate::scouting::scout::ext::Tag`].
+    pub type Tag = zextzbuf!(0x2, false);
 }
 
 impl HelloProto {
@@ -123,11 +137,13 @@ impl HelloProto {
         } else {
             vec![]
         };
+        let ext_tag = rng.gen_bool(0.5).then_some(ext::Tag::rand());
         Self {
             version,
             zid,
             whatami,
             locators,
+            ext_tag,
         }
     }
 }

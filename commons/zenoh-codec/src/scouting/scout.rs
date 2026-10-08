@@ -18,11 +18,11 @@ use zenoh_buffers::{
     writer::{DidntWrite, Writer},
 };
 use zenoh_protocol::{
-    common::{imsg, ZExtUnknown},
+    common::{iext, imsg, ZExtUnknown},
     core::{whatami::WhatAmIMatcher, ZenohIdProto},
     scouting::{
         id,
-        scout::{flag, Scout},
+        scout::{ext, flag, Scout},
     },
 };
 
@@ -35,10 +35,18 @@ where
     type Output = Result<(), DidntWrite>;
 
     fn write(self, writer: &mut W, x: &Scout) -> Self::Output {
-        let Scout { version, what, zid } = x;
+        let Scout {
+            version,
+            what,
+            zid,
+            ext_tag,
+        } = x;
 
         // Header
-        let header = id::SCOUT;
+        let mut header = id::SCOUT;
+        if ext_tag.is_some() {
+            header |= flag::Z;
+        }
         self.write(&mut *writer, header)?;
 
         // Body
@@ -55,6 +63,11 @@ where
         if let Some(zid) = zid.as_ref() {
             let lodec = Zenoh080Length::new(zid.size());
             lodec.write(&mut *writer, zid)?;
+        }
+
+        // Extensions: the tag is the only one, so none follows it.
+        if let Some(tag) = ext_tag.as_ref() {
+            self.write(&mut *writer, (tag, false))?;
         }
 
         Ok(())
@@ -99,13 +112,31 @@ where
             None
         };
 
-        // Extensions
-        let mut has_extensions = imsg::has_flag(self.header, flag::Z);
-        while has_extensions {
-            let (_, more): (ZExtUnknown, bool) = self.codec.read(&mut *reader)?;
-            has_extensions = more;
+        // Extensions. Any other one is skipped, mandatory or not, as before the
+        // tag existed.
+        let mut ext_tag = None;
+        let mut has_ext = imsg::has_flag(self.header, flag::Z);
+        while has_ext {
+            let ext: u8 = self.codec.read(&mut *reader)?;
+            let eodec = Zenoh080Header::new(ext);
+            match iext::eid(ext) {
+                ext::Tag::ID => {
+                    let (tag, more): (ext::Tag, bool) = eodec.read(&mut *reader)?;
+                    ext_tag = Some(tag);
+                    has_ext = more;
+                }
+                _ => {
+                    let (_, more): (ZExtUnknown, bool) = eodec.read(&mut *reader)?;
+                    has_ext = more;
+                }
+            }
         }
 
-        Ok(Scout { version, what, zid })
+        Ok(Scout {
+            version,
+            what,
+            zid,
+            ext_tag,
+        })
     }
 }

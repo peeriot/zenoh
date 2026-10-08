@@ -346,16 +346,7 @@ impl<'a> TlsClientConfig<'a> {
             None => TLS_CLOSE_LINK_ON_EXPIRATION_DEFAULT,
         };
 
-        // Allows mixed user-generated CA and webPKI CA
-        tracing::debug!("Loading default Web PKI certificates.");
-        let mut root_cert_store = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
-
-        if let Some(custom_root_cert) = load_trust_anchors(config)? {
-            tracing::debug!("Loading user-generated certificates.");
-            root_cert_store.extend(custom_root_cert.roots);
-        }
+        let root_cert_store = client_root_store(config)?;
 
         // Install ring based rustls CryptoProvider.
         rustls::crypto::ring::default_provider()
@@ -554,6 +545,13 @@ async fn load_tls_certificate(
     Err(zerror!("Missing tls certificates.").into())
 }
 
+/// The roots a connector checks the server's chain against: the configured
+/// ones only, none when nothing is configured. A leaf from a public CA is no
+/// peer.
+fn client_root_store(config: &Config<'_>) -> ZResult<RootCertStore> {
+    Ok(load_trust_anchors(config)?.unwrap_or_else(RootCertStore::empty))
+}
+
 fn load_trust_anchors(config: &Config<'_>) -> ZResult<Option<RootCertStore>> {
     let mut root_cert_store = RootCertStore::empty();
     if let Some(value) = config.get(TLS_ROOT_CA_CERTIFICATE_RAW) {
@@ -604,4 +602,26 @@ pub fn get_tls_host<'a>(address: &'a Address<'a>) -> ZResult<&'a str> {
 
 pub fn get_tls_server_name<'a>(address: &'a Address<'a>) -> ZResult<ServerName<'a>> {
     Ok(ServerName::try_from(get_tls_host(address)?).map_err(|e| zerror!(e))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use zenoh_protocol::core::EndPoint;
+
+    use super::*;
+
+    /// A self-signed P-256 certificate made by openssl, PEM in base64.
+    const ROOT_PEM_BASE64: &str = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tDQpNSUlCaXpDQ0FUR2dBd0lCQWdJVVdhNHNJRUFLUmdiNjlrOTgrMU5BSFU3cmc0UXdDZ1lJS29aSXpqMEVBd0l3DQpHakVZTUJZR0ExVUVBd3dQZW1WdWIyZ2dkR1Z6ZENCeWIyOTBNQ0FYRFRJMk1Ea3lOREUzTkRnME1Wb1lEekl4DQpNall3T0RNeE1UYzBPRFF4V2pBYU1SZ3dGZ1lEVlFRRERBOTZaVzV2YUNCMFpYTjBJSEp2YjNRd1dUQVRCZ2NxDQpoa2pPUFFJQkJnZ3Foa2pPUFFNQkJ3TkNBQVJKMGhLbFlzS0h0c05mMER2dnRVck8vL2dDMWVmSEZoOHdFaVVDDQoxd0tmS0dFZkE3RjVmNFJPbEZPVTNGcWI3K0FRVW84aGdUSjdWbG1qMm5EcnNtK2JvMU13VVRBZEJnTlZIUTRFDQpGZ1FVaFdsV2xqYSswbUpxSElmTWhMZm8ybUFwdXVnd0h3WURWUjBqQkJnd0ZvQVVoV2xXbGphKzBtSnFISWZNDQpoTGZvMm1BcHV1Z3dEd1lEVlIwVEFRSC9CQVV3QXdFQi96QUtCZ2dxaGtqT1BRUURBZ05JQURCRkFpQkx6NGtxDQp6K01wL2NDN1d2cmtKbUk1L1JjMnBSbXRocWFQSVhReDM1cEFZUUloQUk3WmE5Z1p6cUk0TXo1ZmpGbGg2MmZmDQpUZkMrY081TXZ6NDVyOWZwaFQ1Rw0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQ0K";
+
+    #[test]
+    fn a_connector_trusts_only_the_configured_roots() {
+        let bare: EndPoint = "tls/localhost:7447".parse().unwrap();
+        assert!(client_root_store(&bare.config()).unwrap().is_empty());
+
+        let rooted: EndPoint =
+            format!("tls/localhost:7447#{TLS_ROOT_CA_CERTIFICATE_BASE64}={ROOT_PEM_BASE64}")
+                .parse()
+                .unwrap();
+        assert_eq!(client_root_store(&rooted.config()).unwrap().len(), 1);
+    }
 }

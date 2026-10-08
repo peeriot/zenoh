@@ -35,7 +35,6 @@ quic = [
   "dep:rustls-pemfile",
   "dep:rustls-pki-types",
   "dep:secrecy",
-  "dep:webpki-roots",
   "dep:x509-parser",
   "dep:zenoh-config",
   "tls",
@@ -70,7 +69,6 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-webpki-roots = { workspace = true, optional = true }
 x509-parser = { workspace = true, optional = true }
 zenoh-buffers = { workspace = true }
 zenoh-codec = { workspace = true }

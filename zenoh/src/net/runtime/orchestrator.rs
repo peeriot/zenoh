@@ -28,13 +28,15 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use zenoh_buffers::{
+    buffer::SplitBuffer,
     reader::{DidntRead, HasReader},
     writer::HasWriter,
+    ZBuf,
 };
 use zenoh_codec::{RCodec, WCodec, Zenoh080};
 use zenoh_config::{
     get_global_connect_timeout, get_global_listener_timeout, unwrap_or_default,
-    ConnectionRetryPeriod, ModeDependent,
+    ConnectionRetryPeriod, ModeDependent, ScoutingTag,
 };
 use zenoh_link::{Locator, LocatorInspector};
 use zenoh_protocol::{
@@ -42,7 +44,7 @@ use zenoh_protocol::{
         whatami::WhatAmIMatcher, EndPoint, EndPoints, LocatorsStrategy, Metadata, PriorityRange,
         WhatAmI, ZenohIdProto,
     },
-    scouting::{HelloProto, Scout, ScoutingBody, ScoutingMessage},
+    scouting::{scout, HelloProto, Scout, ScoutingBody, ScoutingMessage},
 };
 use zenoh_result::{bail, zerror, ZResult};
 
@@ -80,6 +82,23 @@ impl ScoutSocket {
     async fn send_multicast(&self, buffer: &[u8], dst: SocketAddr) -> std::io::Result<usize> {
         self.socket.send_to(buffer, dst).await
     }
+}
+
+/// Whether a node with the scouting tag `own` admits a scouting message
+/// carrying `theirs`. A node without a tag admits every message.
+fn tag_admits(own: Option<ScoutingTag>, theirs: Option<&scout::ext::Tag>) -> bool {
+    match own {
+        None => true,
+        Some(own) => {
+            theirs.is_some_and(|tag| tag.value.contiguous().as_ref() == own.as_bytes().as_slice())
+        }
+    }
+}
+
+/// The tag extension a node with the scouting tag `own` puts into its Scouts and
+/// Hellos.
+fn tag_ext(own: Option<ScoutingTag>) -> Option<scout::ext::Tag> {
+    own.map(|tag| scout::ext::Tag::new(ZBuf::from(*tag.as_bytes())))
 }
 
 #[derive(Debug)]
@@ -1223,6 +1242,7 @@ impl Runtime {
         sockets: &[ScoutSocket],
         matcher: WhatAmIMatcher,
         mcast_addr: &SocketAddr,
+        tag: Option<ScoutingTag>,
         f: F,
     ) where
         F: Fn(HelloProto) -> Fut + std::marker::Send + std::marker::Sync + Clone,
@@ -1236,6 +1256,7 @@ impl Runtime {
                 version: zenoh_protocol::VERSION,
                 what: matcher,
                 zid: None,
+                ext_tag: tag_ext(tag),
             }
             .into();
             let mut wbuf = vec![];
@@ -1282,7 +1303,12 @@ impl Runtime {
                             if let Ok(msg) = res {
                                 tracing::trace!("Received {:?} from {}", msg.body, peer);
                                 if let ScoutingBody::Hello(hello) = &msg.body {
-                                    if matcher.matches(hello.whatami) {
+                                    if !tag_admits(tag, hello.ext_tag.as_ref()) {
+                                        tracing::debug!(
+                                            "Ignore Hello from {} without this node's scouting tag",
+                                            peer
+                                        );
+                                    } else if matcher.matches(hello.whatami) {
                                         if let Loop::Break = f(hello.clone()).await {
                                             break;
                                         }
@@ -1464,8 +1490,9 @@ impl Runtime {
         addr: &SocketAddr,
         timeout: std::time::Duration,
     ) -> ZResult<()> {
+        let tag = *self.config().lock().scouting().multicast().tag();
         let scout = async {
-            Runtime::scout(sockets, what, addr, move |hello| async move {
+            Runtime::scout(sockets, what, addr, tag, move |hello| async move {
                 tracing::info!("Found {:?}", hello);
                 if !hello.locators.is_empty() {
                     if self.connect(&hello.zid, &hello.locators).await {
@@ -1495,10 +1522,12 @@ impl Runtime {
         autoconnect: AutoConnect,
         addr: &SocketAddr,
     ) {
+        let tag = *self.config().lock().scouting().multicast().tag();
         Runtime::scout(
             ucast_sockets,
             autoconnect.matcher(),
             addr,
+            tag,
             move |hello| async move {
                 if hello.locators.is_empty() {
                     tracing::debug!("Received Hello with no locators: {:?}", hello);
@@ -1533,6 +1562,7 @@ impl Runtime {
         peer: SocketAddr,
         datagram: &[u8],
         local_addrs: &[SocketAddr],
+        tag: Option<ScoutingTag>,
         ucast_sockets: &'a [ScoutSocket],
     ) -> Option<(ScoutingMessage, &'a ScoutSocket)> {
         if local_addrs.contains(&peer) {
@@ -1553,10 +1583,10 @@ impl Runtime {
         };
 
         tracing::trace!("Received {:?} from {}", msg.body, peer);
-        let ScoutingBody::Scout(Scout { what, .. }) = &msg.body else {
+        let ScoutingBody::Scout(Scout { what, ext_tag, .. }) = &msg.body else {
             return None;
         };
-        if !what.matches(self.whatami()) {
+        if !tag_admits(tag, ext_tag.as_ref()) || !what.matches(self.whatami()) {
             return None;
         }
 
@@ -1573,6 +1603,7 @@ impl Runtime {
             whatami: self.whatami(),
             zid: self.manager().zid(),
             locators: self.get_hello_locators(&peer),
+            ext_tag: tag_ext(tag),
         }
         .into();
 
@@ -1582,6 +1613,10 @@ impl Runtime {
     async fn responder(&self, mcast_socket: &UdpSocket, ucast_sockets: &[ScoutSocket]) {
         let mut buf = vec![0; RCV_BUF_SIZE];
         let local_addrs = scout_socket_addrs(ucast_sockets);
+        let tag = *self.config().lock().scouting().multicast().tag();
+        if let Some(tag) = tag {
+            tracing::info!("Answering only Scouts with scouting tag {}", tag);
+        }
         let mut backoff = ScoutRecvBackoff::new();
         tracing::debug!("Waiting for UDP datagram...");
         loop {
@@ -1597,7 +1632,7 @@ impl Runtime {
                 }
             };
             let Some((hello, socket)) =
-                self.scout_reply(peer, &buf.as_slice()[..n], &local_addrs, ucast_sockets)
+                self.scout_reply(peer, &buf.as_slice()[..n], &local_addrs, tag, ucast_sockets)
             else {
                 continue;
             };
@@ -1897,5 +1932,22 @@ mod tests {
         INTERFACE_CACHE_LOCK
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[test]
+    fn a_node_with_a_tag_admits_only_messages_carrying_it() {
+        const OWN: u8 = 1;
+        const OTHER: u8 = 2;
+        let own = ScoutingTag::new([OWN; ScoutingTag::LEN]);
+        let other = ScoutingTag::new([OTHER; ScoutingTag::LEN]);
+        // A tag of another length never equals a configured one.
+        let short = scout::ext::Tag::new(ZBuf::from([OWN]));
+
+        assert!(tag_admits(None, None));
+        assert!(tag_admits(None, tag_ext(Some(own)).as_ref()));
+        assert!(!tag_admits(Some(own), None));
+        assert!(tag_admits(Some(own), tag_ext(Some(own)).as_ref()));
+        assert!(!tag_admits(Some(own), tag_ext(Some(other)).as_ref()));
+        assert!(!tag_admits(Some(own), Some(&short)));
     }
 }
