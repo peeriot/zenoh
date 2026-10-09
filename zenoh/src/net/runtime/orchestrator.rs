@@ -763,10 +763,16 @@ impl Runtime {
             tracing::debug!("Try to add listener: {:?}: {:?}", endpoint, retry_config);
             if retry_config.timeout().is_zero() || self.get_global_listener_timeout().is_zero() {
                 // try to add listener and exit immediately without retry
-                if let Err(e) = self.add_listener(endpoint).await {
+                if let Err(e) = self.add_listener(endpoint.clone()).await {
                     if retry_config.exit_on_failure {
                         return Err(e);
                     }
+                    // kept for the caller, who otherwise can't tell this endpoint was skipped
+                    self.state
+                        .listener_failures
+                        .lock()
+                        .unwrap()
+                        .push((endpoint, e.to_string()));
                 };
             } else if retry_config.exit_on_failure {
                 // try to add listener with retry waiting

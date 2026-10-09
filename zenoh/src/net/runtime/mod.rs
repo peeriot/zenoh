@@ -187,6 +187,8 @@ pub(crate) struct RuntimeState {
     transport_handlers: std::sync::RwLock<Vec<Arc<dyn TransportEventHandler>>>,
     locators: std::sync::RwLock<Vec<Locator>>,
     locators_noloopback: std::sync::RwLock<Vec<Locator>>,
+    /// The listen endpoints that failed to open at startup and were given up on, with the reason.
+    listener_failures: std::sync::Mutex<Vec<(EndPoint, String)>>,
     hlc: Option<Arc<HLC>>,
     // TODO: lazy_hlc is added for timestamp instrumentation feature, in order to avoid breaking
     // existing logic that relies on state of hlc Option to check if timestamping is enabled or
@@ -839,6 +841,7 @@ impl RuntimeBuilder {
                 transport_handlers: std::sync::RwLock::new(vec![]),
                 locators: std::sync::RwLock::new(vec![]),
                 locators_noloopback: std::sync::RwLock::new(vec![]),
+                listener_failures: std::sync::Mutex::new(vec![]),
                 hlc,
                 #[cfg(feature = "unstable")]
                 lazy_hlc: OnceLock::new(),
@@ -978,6 +981,23 @@ impl Runtime {
 
     pub fn get_locators_noloopback(&self) -> Vec<Locator> {
         self.state.get_locators_noloopback()
+    }
+
+    /// The endpoints the runtime listens on.
+    ///
+    /// Unlike [`Runtime::get_locators`], which expands an unspecified address into the
+    /// interfaces' addresses, this lists every listener, also one on a host with nothing but
+    /// loopback.
+    pub async fn get_listeners(&self) -> Vec<EndPoint> {
+        self.manager().get_listeners().await
+    }
+
+    /// The listen endpoints that failed to open at startup, with the reason.
+    ///
+    /// Startup only goes on past a failed endpoint when `exit_on_failure` is `false` for it;
+    /// an endpoint left to retry in the background is not a failure (yet).
+    pub fn listener_failures(&self) -> Vec<(EndPoint, String)> {
+        self.state.listener_failures.lock().unwrap().clone()
     }
 
     /// Spawns a task within runtime.
