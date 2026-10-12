@@ -390,13 +390,6 @@ impl TlsClientConfig {
             tracing::warn!("Skipping name verification of QUIC server");
         }
 
-        let tls_close_link_on_expiration: bool = match config.get(TLS_CLOSE_LINK_ON_EXPIRATION) {
-            Some(s) => s
-                .parse()
-                .map_err(|_| zerror!("Unknown close on expiration argument: {}", s))?,
-            None => TLS_CLOSE_LINK_ON_EXPIRATION_DEFAULT,
-        };
-
         let root_cert_store = client_root_store(config)?;
 
         let cc = if tls_client_server_auth {
