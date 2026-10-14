@@ -60,7 +60,7 @@ mod tests {
         let peer = SocketAddr::new(UNUSABLE, 7446);
 
         assert!(runtime
-            .scout_reply(peer, &scout_datagram(), &[], &[])
+            .scout_reply(peer, &scout_datagram(), &[], None, &[])
             .is_none());
     }
 
@@ -158,13 +158,14 @@ mod tests {
         .unwrap();
 
         assert!(runtime
-            .scout_reply(own, &scout_datagram(), &after, &ucast_sockets)
+            .scout_reply(own, &scout_datagram(), &after, None, &ucast_sockets)
             .is_none());
         assert!(runtime
             .scout_reply(
                 SocketAddr::new(UNUSABLE, 7446),
                 &scout_datagram(),
                 &after,
+                None,
                 &ucast_sockets,
             )
             .is_some());
@@ -248,6 +249,7 @@ mod tests {
             version: zenoh_protocol::VERSION,
             what: WhatAmIMatcher::empty().router().peer().client(),
             zid: None,
+            ext_tag: None,
         };
         let message: ScoutingMessage = scout.into();
         let mut buffer = vec![];

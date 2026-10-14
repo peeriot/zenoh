@@ -46,6 +46,7 @@ fn hello_rejects_locator_count_larger_than_remaining_input() {
         whatami: WhatAmI::Client,
         zid: fixed_zid(),
         locators: vec![Locator::new("tcp", "127.0.0.1:7447", "").expect("locator must be valid")],
+        ext_tag: None,
     };
 
     let codec = Zenoh080::new();
