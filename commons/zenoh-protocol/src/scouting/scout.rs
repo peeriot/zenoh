@@ -54,6 +54,8 @@ use crate::core::{whatami::WhatAmIMatcher, ZenohIdProto};
 /// +-+-+-+-+-+-+-+-+
 /// ~      [u8]     ~ if Flag(I)==1 -- ZenohID
 /// +---------------+
+/// ~  [ScoutExts]  ~ if Flag(Z)==1
+/// +---------------+
 ///
 /// (#) ZID length. If Flag(I)==1 it indicates how many bytes are used for the ZenohID bytes.
 ///     A ZenohID is minimum 1 byte and maximum 16 bytes. Therefore, the actual length is computed as:
@@ -77,6 +79,18 @@ pub struct Scout {
     pub version: u8,
     pub what: WhatAmIMatcher,
     pub zid: Option<ZenohIdProto>,
+    pub ext_tag: Option<ext::Tag>,
+}
+
+// Extensions
+pub mod ext {
+    use crate::zextzbuf;
+
+    /// # Tag extension
+    /// The scouting tag of the sender. A node configured with a tag answers only
+    /// Scouts that carry the same tag. Non-mandatory: a node that does not know
+    /// the extension skips it.
+    pub type Tag = zextzbuf!(0x2, false);
 }
 
 impl Scout {
@@ -90,6 +104,12 @@ impl Scout {
         let version: u8 = rng.gen();
         let what = WhatAmIMatcher::rand();
         let zid = rng.gen_bool(0.5).then_some(ZenohIdProto::rand());
-        Self { version, what, zid }
+        let ext_tag = rng.gen_bool(0.5).then_some(ext::Tag::rand());
+        Self {
+            version,
+            what,
+            zid,
+            ext_tag,
+        }
     }
 }

@@ -18,10 +18,10 @@ use zenoh_buffers::{
     writer::{DidntWrite, Writer},
 };
 use zenoh_protocol::{
-    common::{imsg, ZExtUnknown},
+    common::{iext, imsg, ZExtUnknown},
     core::{Locator, WhatAmI, ZenohIdProto},
     scouting::{
-        hello::{flag, HelloProto},
+        hello::{ext, flag, HelloProto},
         id,
     },
 };
@@ -40,12 +40,16 @@ where
             whatami,
             zid,
             locators,
+            ext_tag,
         } = x;
 
         // Header
         let mut header = id::HELLO;
         if !locators.is_empty() {
             header |= flag::L;
+        }
+        if ext_tag.is_some() {
+            header |= flag::Z;
         }
         self.write(&mut *writer, header)?;
 
@@ -67,6 +71,11 @@ where
 
         if !locators.is_empty() {
             self.write(&mut *writer, locators.as_slice())?;
+        }
+
+        // Extensions: the tag is the only one, so none follows it.
+        if let Some(tag) = ext_tag.as_ref() {
+            self.write(&mut *writer, (tag, false))?;
         }
 
         Ok(())
@@ -117,11 +126,24 @@ where
             vec![]
         };
 
-        // Extensions
-        let mut has_extensions = imsg::has_flag(self.header, flag::Z);
-        while has_extensions {
-            let (_, more): (ZExtUnknown, bool) = self.codec.read(&mut *reader)?;
-            has_extensions = more;
+        // Extensions. Any other one is skipped, mandatory or not, as before the
+        // tag existed.
+        let mut ext_tag = None;
+        let mut has_ext = imsg::has_flag(self.header, flag::Z);
+        while has_ext {
+            let ext: u8 = self.codec.read(&mut *reader)?;
+            let eodec = Zenoh080Header::new(ext);
+            match iext::eid(ext) {
+                ext::Tag::ID => {
+                    let (tag, more): (ext::Tag, bool) = eodec.read(&mut *reader)?;
+                    ext_tag = Some(tag);
+                    has_ext = more;
+                }
+                _ => {
+                    let (_, more): (ZExtUnknown, bool) = eodec.read(&mut *reader)?;
+                    has_ext = more;
+                }
+            }
         }
 
         Ok(HelloProto {
@@ -129,6 +151,7 @@ where
             zid,
             whatami,
             locators,
+            ext_tag,
         })
     }
 }

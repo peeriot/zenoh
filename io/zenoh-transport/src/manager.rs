@@ -17,7 +17,7 @@ use rand::{RngCore, SeedableRng};
 use tokio::sync::Mutex as AsyncMutex;
 use zenoh_config::{ExpandedConfig, LinkRxConf, QueueAllocConf, QueueConf, QueueSizeConf};
 use zenoh_crypto::{BlockCipher, PseudoRng};
-use zenoh_link::{LinkKind, NewLinkChannelSender};
+use zenoh_link::{LinkAuthenticator, LinkKind, NewLinkChannelSender};
 use zenoh_protocol::{
     core::{
         Bound, EndPoint, Field, Locator, Priority, RegionName, Resolution, WhatAmI, ZenohIdProto,
@@ -143,6 +143,7 @@ pub struct TransportManagerConfig {
     pub supported_links: Vec<LinkKind>,
     pub bound_callback: Option<RemoteBoundCallback>,
     pub region_name: Option<RegionName>,
+    pub link_authenticator: Option<Arc<dyn LinkAuthenticator>>,
 }
 
 impl fmt::Debug for TransportManagerConfig {
@@ -246,6 +247,7 @@ pub struct TransportManagerBuilder {
     supported_links: Option<Vec<LinkKind>>,
     region_name: Option<RegionName>,
     bound_callback: Option<RemoteBoundCallback>,
+    link_authenticator: Option<Arc<dyn LinkAuthenticator>>,
     #[cfg(feature = "shared-memory")]
     shm: zenoh_config::ShmConf,
     #[cfg(feature = "shared-memory")]
@@ -411,6 +413,13 @@ impl TransportManagerBuilder {
         self
     }
 
+    /// Authenticate each new `tls/` link with `authenticator` before the
+    /// transport uses it.
+    pub fn link_authenticator(mut self, authenticator: Arc<dyn LinkAuthenticator>) -> Self {
+        self.link_authenticator = Some(authenticator);
+        self
+    }
+
     pub async fn from_config(
         mut self,
         config: &ExpandedConfig,
@@ -516,6 +525,7 @@ impl TransportManagerBuilder {
                 .unwrap_or_else(|| zenoh_link::ALL_SUPPORTED_LINKS.to_vec()),
             bound_callback: self.bound_callback,
             region_name: self.region_name,
+            link_authenticator: self.link_authenticator,
         };
 
         if cfg!(feature = "uring")
@@ -613,6 +623,7 @@ impl Default for TransportManagerBuilder {
             supported_links: None,
             region_name: None,
             bound_callback: None,
+            link_authenticator: None,
             #[cfg(feature = "shared-memory")]
             shm: zenoh_config::ShmConf::default(),
             #[cfg(feature = "shared-memory")]

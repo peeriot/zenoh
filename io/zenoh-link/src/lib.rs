@@ -404,9 +404,11 @@ impl LinkConfigurator {
 pub struct LinkManagerBuilderUnicast;
 
 impl LinkManagerBuilderUnicast {
+    /// `_authenticator` runs on each new link of the kinds that take one: `tls/`.
     pub fn make(
         _manager: NewLinkChannelSender,
         endpoint: &EndPoint,
+        _authenticator: Option<std::sync::Arc<dyn LinkAuthenticator>>,
     ) -> ZResult<LinkManagerUnicast> {
         #[allow(unused_imports)]
         use zenoh_link_commons::LocatorInspector;
@@ -416,7 +418,10 @@ impl LinkManagerBuilderUnicast {
             #[cfg(feature = "transport_udp")]
             LinkKind::Udp => Ok(std::sync::Arc::new(LinkManagerUnicastUdp::new(_manager))),
             #[cfg(feature = "transport_tls")]
-            LinkKind::Tls => Ok(std::sync::Arc::new(LinkManagerUnicastTls::new(_manager))),
+            LinkKind::Tls => Ok(std::sync::Arc::new(LinkManagerUnicastTls::new(
+                _manager,
+                _authenticator,
+            ))),
             #[cfg(feature = "transport_quic_datagram")]
             LinkKind::QuicDatagram => Ok(std::sync::Arc::new(LinkManagerUnicastQuicDatagram::new(
                 _manager,

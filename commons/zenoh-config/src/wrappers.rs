@@ -128,6 +128,7 @@ impl Hello {
             whatami: WhatAmI::default(),
             zid: ZenohIdProto::default(),
             locators: Vec::default(),
+            ext_tag: None,
         })
     }
 }

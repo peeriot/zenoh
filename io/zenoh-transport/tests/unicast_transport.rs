@@ -3313,4 +3313,510 @@ async fn transport_unicast_close_link_lowlatency() {
     ztimeout!(router_manager.del_listener(&endpoint)).unwrap();
     ztimeout!(router_manager.close());
     ztimeout!(client_manager.close());
+/// The link authenticator hook on `tls/` links: it runs before the transport's
+/// first byte, on both sides, and a refusal leaves no transport. The TLS accept
+/// loop these links come through takes its next connection at once after a
+/// failed handshake.
+#[cfg(all(feature = "transport_tls", target_family = "unix"))]
+mod link_authenticator {
+    use async_trait::async_trait;
+    use tokio::io::AsyncWriteExt;
+    use zenoh_link::{LinkAuthenticator, LinkSide, LinkUnicast};
+    use zenoh_link_commons::tls::config::*;
+    use zenoh_result::bail;
+
+    use super::*;
+
+    const TOKEN_LEN: usize = 8;
+    const CONNECTOR_TOKEN: [u8; TOKEN_LEN] = *b"connects";
+    const ACCEPTOR_TOKEN: [u8; TOKEN_LEN] = *b"accepts.";
+    /// How long a second connector may take while the first is held: well
+    /// below the connector's own open timeout.
+    const ADMIT_BOUND: Duration = Duration::from_secs(5);
+    const CLIENT_ZID: u8 = 1;
+    const ROUTER_ZID: u8 = 2;
+    const SECOND_CLIENT_ZID: u8 = 3;
+
+    /// Writes its token to the peer and reads the peer's, the connector first,
+    /// and admits the link when the peer's token is `peer` and its leaf
+    /// `peer_leaf`.
+    struct Tokens {
+        mine: [u8; TOKEN_LEN],
+        peer: [u8; TOKEN_LEN],
+        peer_leaf: Vec<u8>,
+    }
+
+    /// The DER of the one certificate in `pem`.
+    fn der(pem: &str) -> Vec<u8> {
+        let mut reader = pem.as_bytes();
+        let mut certificates = rustls_pemfile::certs(&mut reader);
+        certificates.next().unwrap().unwrap().to_vec()
+    }
+
+    impl Tokens {
+        async fn read_peer(&self, link: &LinkUnicast) -> ZResult<()> {
+            let mut read = [0; TOKEN_LEN];
+            link.read_exact(&mut read).await?;
+            if read != self.peer {
+                bail!("the peer's token is {read:?}");
+            }
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl LinkAuthenticator for Tokens {
+        async fn authenticate(
+            &self,
+            link: &LinkUnicast,
+            peer_certificates: &[Vec<u8>],
+            side: LinkSide,
+        ) -> ZResult<()> {
+            if peer_certificates.first() != Some(&self.peer_leaf) {
+                bail!("the leaf is not the peer's certificate");
+            }
+            match side {
+                LinkSide::Connect => {
+                    link.write_all(&self.mine).await?;
+                    self.read_peer(link).await
+                }
+                LinkSide::Accept => {
+                    self.read_peer(link).await?;
+                    link.write_all(&self.mine).await
+                }
+            }
+        }
+    }
+
+    /// Refuses every link unread.
+    struct Refuse;
+
+    #[async_trait]
+    impl LinkAuthenticator for Refuse {
+        async fn authenticate(&self, _: &LinkUnicast, _: &[Vec<u8>], _: LinkSide) -> ZResult<()> {
+            bail!("refused")
+        }
+    }
+
+    /// Holds the first link it sees for good and admits every later one.
+    #[derive(Default)]
+    struct HoldFirst {
+        seen: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl LinkAuthenticator for HoldFirst {
+        async fn authenticate(&self, _: &LinkUnicast, _: &[Vec<u8>], _: LinkSide) -> ZResult<()> {
+            if self.seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        }
+    }
+
+    /// A connector's and a listener's mutual-TLS endpoint on `port`.
+    fn endpoints(port: u16) -> (EndPoint, EndPoint) {
+        let endpoint = |config: [(&str, &str); 4]| {
+            let mut endpoint: EndPoint = format!("tls/localhost:{port}").parse().unwrap();
+            endpoint
+                .config_mut()
+                .extend_from_iter(config.iter().copied())
+                .unwrap();
+            endpoint
+        };
+        let client = endpoint([
+            (TLS_ROOT_CA_CERTIFICATE_RAW, SERVER_CA),
+            (TLS_CONNECT_CERTIFICATE_RAW, CLIENT_CERT),
+            (TLS_CONNECT_PRIVATE_KEY_RAW, CLIENT_KEY),
+            (TLS_ENABLE_MTLS, "true"),
+        ]);
+        let server = endpoint([
+            (TLS_ROOT_CA_CERTIFICATE_RAW, CLIENT_CA),
+            (TLS_LISTEN_CERTIFICATE_RAW, SERVER_CERT),
+            (TLS_LISTEN_PRIVATE_KEY_RAW, SERVER_KEY),
+            (TLS_ENABLE_MTLS, "true"),
+        ]);
+        (client, server)
+    }
+
+    fn manager(
+        zid: u8,
+        whatami: WhatAmI,
+        handler: Arc<dyn TransportEventHandler>,
+        authenticator: Option<Arc<dyn LinkAuthenticator>>,
+    ) -> TransportManager {
+        let unicast = make_transport_manager_builder(
+            #[cfg(feature = "transport_multilink")]
+            1,
+            false,
+        );
+        let builder = TransportManager::builder()
+            .zid(ZenohIdProto::try_from([zid]).unwrap())
+            .whatami(whatami)
+            .unicast(unicast);
+        let builder = match authenticator {
+            Some(authenticator) => builder.link_authenticator(authenticator),
+            None => builder,
+        };
+        builder.build_test(handler).unwrap()
+    }
+
+    /// A router listening on `server` with `authenticator`.
+    async fn router(
+        server: &EndPoint,
+        handler: Arc<SHRouter>,
+        authenticator: Option<Arc<dyn LinkAuthenticator>>,
+    ) -> TransportManager {
+        let router = manager(ROUTER_ZID, WhatAmI::Router, handler, authenticator);
+        ztimeout!(router.add_listener(server.clone())).unwrap();
+        router
+    }
+
+    fn client(zid: u8, authenticator: Option<Arc<dyn LinkAuthenticator>>) -> TransportManager {
+        manager(zid, WhatAmI::Client, Arc::new(SHClient), authenticator)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn authenticator_admits_and_stream_stays_clean() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10471);
+        let handler = Arc::new(SHRouter::default());
+        let acceptor = Tokens {
+            mine: ACCEPTOR_TOKEN,
+            peer: CONNECTOR_TOKEN,
+            peer_leaf: der(CLIENT_CERT),
+        };
+        let router = router(&server_endpoint, handler.clone(), Some(Arc::new(acceptor))).await;
+        let connector = Tokens {
+            mine: CONNECTOR_TOKEN,
+            peer: ACCEPTOR_TOKEN,
+            peer_leaf: der(SERVER_CERT),
+        };
+        let client = client(CLIENT_ZID, Some(Arc::new(connector)));
+
+        let transport = ztimeout!(client.open_transport_unicast(client_endpoint.clone())).unwrap();
+        // The transport reads its first byte after the tokens: nothing was
+        // read ahead or left behind.
+        let channel = Channel {
+            priority: Priority::DEFAULT,
+            reliability: Reliability::Reliable,
+        };
+        test_transport(handler, transport.clone(), channel, MSG_SIZE_ALL[0]).await;
+        close_transport(router, client, transport, &[client_endpoint]).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn refusal_on_accept_blocks_transport() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10472);
+        let router = router(
+            &server_endpoint,
+            Arc::new(SHRouter::default()),
+            Some(Arc::new(Refuse)),
+        )
+        .await;
+        let client = client(CLIENT_ZID, None);
+
+        assert!(ztimeout!(client.open_transport_unicast(client_endpoint)).is_err());
+        assert!(router.get_transports_unicast().await.is_empty());
+        ztimeout!(router.close());
+        ztimeout!(client.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn refusal_on_connect_blocks_transport() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10473);
+        let router = router(&server_endpoint, Arc::new(SHRouter::default()), None).await;
+        let client = client(CLIENT_ZID, Some(Arc::new(Refuse)));
+
+        assert!(ztimeout!(client.open_transport_unicast(client_endpoint)).is_err());
+        // The acceptor reads the refused link's end before any InitSyn.
+        tokio::time::sleep(SLEEP).await;
+        assert!(router.get_transports_unicast().await.is_empty());
+        ztimeout!(router.close());
+        ztimeout!(client.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn slow_authentication_does_not_block_accepts() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10474);
+        let hold = Arc::new(HoldFirst::default());
+        let router = router(
+            &server_endpoint,
+            Arc::new(SHRouter::default()),
+            Some(hold.clone()),
+        )
+        .await;
+
+        let held = client(CLIENT_ZID, None);
+        let held_open = tokio::spawn({
+            let endpoint = client_endpoint.clone();
+            async move { held.open_transport_unicast(endpoint).await.map(|_| ()) }
+        });
+        ztimeout!(async {
+            while hold.seen.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(SLEEP_COUNT).await;
+            }
+        });
+
+        let second = client(SECOND_CLIENT_ZID, None);
+        let opened =
+            tokio::time::timeout(ADMIT_BOUND, second.open_transport_unicast(client_endpoint)).await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "a held authentication blocked the next accept"
+        );
+        held_open.abort();
+        ztimeout!(second.close());
+        ztimeout!(router.close());
+    }
+
+    /// A write that stalls this long has filled every buffer between the
+    /// listener and a peer that stops reading.
+    const FILL_STALL: Duration = Duration::from_millis(200);
+    const FILL_CHUNK: usize = 64 * 1024;
+    /// The refused peer's receive buffer: small, so the buffers fill fast.
+    const LINGER_RCVBUF: &str = "4096";
+    /// Well below `TLS_LINGER_TIMEOUT` (10 s), the time a lingering close of a
+    /// refused link would hold the accept worker.
+    const LINGER_STALL_BOUND: Duration = Duration::from_secs(2);
+
+    /// Fills the first link until its peer's buffers are full, with bytes left
+    /// unsent, then refuses it, or holds it for good when `hold`; admits every
+    /// later link. A connector first reads what the acceptor sent after the
+    /// handshake, TLS 1.3's session tickets: a close with bytes unread resets
+    /// at once, and lingers not.
+    #[derive(Default)]
+    struct FillThenRefuse {
+        seen: AtomicUsize,
+        filled: tokio::sync::Notify,
+        hold: bool,
+    }
+
+    #[async_trait]
+    impl LinkAuthenticator for FillThenRefuse {
+        async fn authenticate(
+            &self,
+            link: &LinkUnicast,
+            _: &[Vec<u8>],
+            side: LinkSide,
+        ) -> ZResult<()> {
+            if self.seen.fetch_add(1, Ordering::SeqCst) > 0 {
+                return Ok(());
+            }
+            if side == LinkSide::Connect {
+                let _ = tokio::time::timeout(FILL_STALL, link.read(&mut [0; 1])).await;
+            }
+            let chunk = vec![0; FILL_CHUNK];
+            while let Ok(Ok(())) = tokio::time::timeout(FILL_STALL, link.write_all(&chunk)).await {}
+            self.filled.notify_one();
+            if self.hold {
+                std::future::pending::<()>().await;
+            }
+            bail!("refused with bytes unsent")
+        }
+    }
+
+    /// A listener that holds its links and reads nothing, on `server`.
+    async fn unread_router(server: EndPoint) -> TransportManager {
+        let mut unread = server;
+        unread
+            .config_mut()
+            .extend_from_iter(
+                [(zenoh_link_commons::TCP_SO_RCV_BUF, LINGER_RCVBUF)]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        router(
+            &unread,
+            Arc::new(SHRouter::default()),
+            Some(Arc::new(HoldFirst::default())),
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn refused_link_does_not_linger() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10475);
+        let fill = Arc::new(FillThenRefuse::default());
+        let router = router(
+            &server_endpoint,
+            Arc::new(SHRouter::default()),
+            Some(fill.clone()),
+        )
+        .await;
+
+        // The first client holds its link and reads nothing.
+        let mut unread = client_endpoint.clone();
+        unread
+            .config_mut()
+            .extend_from_iter(
+                [(zenoh_link_commons::TCP_SO_RCV_BUF, LINGER_RCVBUF)]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        let held = client(CLIENT_ZID, Some(Arc::new(HoldFirst::default())));
+        let held_open =
+            tokio::spawn(async move { held.open_transport_unicast(unread).await.map(|_| ()) });
+        ztimeout!(fill.filled.notified());
+
+        let second = client(SECOND_CLIENT_ZID, None);
+        let opened = tokio::time::timeout(
+            LINGER_STALL_BOUND,
+            second.open_transport_unicast(client_endpoint),
+        )
+        .await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "the close of a refused link held up the next accept"
+        );
+        held_open.abort();
+        ztimeout!(second.close());
+        ztimeout!(router.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn refused_connect_does_not_linger() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10476);
+        let router = unread_router(server_endpoint).await;
+        let fill = Arc::new(FillThenRefuse::default());
+        let client = Arc::new(client(CLIENT_ZID, Some(fill.clone())));
+        let open = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .open_transport_unicast(client_endpoint)
+                    .await
+                    .map(|_| ())
+            }
+        });
+        ztimeout!(fill.filled.notified());
+
+        // The open ends with the refusal: a lingering close would hold it,
+        // and the worker under tokio's timers with it. The clock is the
+        // system's.
+        let refused = std::time::Instant::now();
+        assert!(ztimeout!(open).unwrap().is_err());
+        assert!(
+            refused.elapsed() < LINGER_STALL_BOUND,
+            "the close of a refused link held up its open"
+        );
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_connect_does_not_linger() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10477);
+        let router = unread_router(server_endpoint).await;
+        let fill = Arc::new(FillThenRefuse {
+            hold: true,
+            ..Default::default()
+        });
+        let client = client(CLIENT_ZID, Some(fill.clone()));
+        // Boxed: dropping it drops the open itself.
+        let mut open = Box::pin(client.open_transport_unicast(client_endpoint));
+        ztimeout!(async {
+            tokio::select! {
+                _ = &mut open => panic!("the open ended before its verdict"),
+                () = fill.filled.notified() => {}
+            }
+        });
+
+        // Dropped before a verdict, as zenoh's open timeout drops it: the link
+        // goes with bytes unsent, and a lingering close would hold this
+        // thread. The clock is the system's.
+        let cancelled = std::time::Instant::now();
+        drop(open);
+        assert!(
+            cancelled.elapsed() < LINGER_STALL_BOUND,
+            "the close of a cancelled link lingered"
+        );
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
+
+    /// zenoh-link-tls's `TLS_ACCEPT_THROTTLE_TIME`: the pause a listener error
+    /// takes.
+    const ACCEPT_THROTTLE: Duration = Duration::from_millis(100);
+    /// Handshakes that fail ahead of a client's open. Paused each, they would
+    /// hold the accept loop twice `BURST_BOUND`.
+    const FAILED_HANDSHAKES: u32 = 50;
+    /// How long a client's open may take after the failed handshakes.
+    const BURST_BOUND: Duration = ACCEPT_THROTTLE.saturating_mul(FAILED_HANDSHAKES / 2);
+    /// A first TLS record no handshake accepts.
+    const NOT_TLS: &[u8] = b"not a TLS record";
+    /// The listener's handshake timeout: silent peers time out within the
+    /// test.
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// `FAILED_HANDSHAKES` TCP connections to `server`'s listener, none of
+    /// which has sent a byte.
+    async fn tcp_connections(server: &EndPoint) -> Vec<tokio::net::TcpStream> {
+        let mut connections = Vec::new();
+        for _ in 0..FAILED_HANDSHAKES {
+            let connection = tokio::net::TcpStream::connect(server.address().as_str());
+            connections.push(ztimeout!(connection).unwrap());
+        }
+        connections
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_handshakes_do_not_pause_accepts() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, server_endpoint) = endpoints(10478);
+        let router = router(&server_endpoint, Arc::new(SHRouter::default()), None).await;
+        let mut failed = tcp_connections(&server_endpoint).await;
+        for connection in &mut failed {
+            ztimeout!(connection.write_all(NOT_TLS)).unwrap();
+        }
+
+        let client = client(CLIENT_ZID, None);
+        let opened =
+            tokio::time::timeout(BURST_BOUND, client.open_transport_unicast(client_endpoint)).await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "failed handshakes paused the accept loop"
+        );
+        drop(failed);
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn timed_out_handshakes_do_not_pause_accepts() {
+        zenoh_util::init_log_from_env_or("error");
+        let (client_endpoint, mut server_endpoint) = endpoints(10479);
+        let timeout = HANDSHAKE_TIMEOUT.as_millis().to_string();
+        server_endpoint
+            .config_mut()
+            .extend_from_iter(
+                [(TLS_HANDSHAKE_TIMEOUT_MS, timeout.as_str())]
+                    .iter()
+                    .copied(),
+            )
+            .unwrap();
+        let router = router(&server_endpoint, Arc::new(SHRouter::default()), None).await;
+        // Silent until each handshake has timed out.
+        let silent = tcp_connections(&server_endpoint).await;
+        tokio::time::sleep(HANDSHAKE_TIMEOUT).await;
+
+        let client = client(CLIENT_ZID, None);
+        let opened =
+            tokio::time::timeout(BURST_BOUND, client.open_transport_unicast(client_endpoint)).await;
+        assert!(
+            matches!(opened, Ok(Ok(_))),
+            "timed-out handshakes paused the accept loop"
+        );
+        drop(silent);
+        ztimeout!(client.close());
+        ztimeout!(router.close());
+    }
 }

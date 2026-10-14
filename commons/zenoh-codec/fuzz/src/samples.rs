@@ -186,6 +186,7 @@ pub(crate) fn sample_scout_scouting_message() -> ScoutingMessage {
         version: 1,
         what: WhatAmI::Peer.into(),
         zid: Some(fixed_zid()),
+        ext_tag: None,
     })
     .into()
 }
@@ -197,6 +198,7 @@ pub(crate) fn sample_hello_scouting_message() -> ScoutingMessage {
         whatami: WhatAmI::Peer,
         zid: fixed_zid(),
         locators: vec![Locator::new("tcp", "127.0.0.1:7447", "").expect("locator must be valid")],
+        ext_tag: None,
     };
     ScoutingBody::Hello(hello).into()
 }
