@@ -79,12 +79,7 @@ where
 
     fn read(self, reader: &mut R) -> Result<Vec<Locator>, Self::Error> {
         let len: usize = self.read(&mut *reader)?;
-        // Each locator takes at least one byte: a count above what is left is
-        // malformed, and sizes no allocation.
-        if len > reader.remaining() {
-            return Err(DidntRead);
-        }
-        let mut vec: Vec<Locator> = Vec::with_capacity(len);
+        let mut vec = Vec::new();
         for _ in 0..len {
             vec.push(self.read(&mut *reader)?);
         }
