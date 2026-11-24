@@ -236,3 +236,101 @@ async fn multicast_autoconnect_works_on_loopback() {
     peer2.close().await.unwrap();
     peer1.close().await.unwrap();
 }
+
+#[cfg(feature = "transport_tcp")]
+#[tokio::test(flavor = "multi_thread")]
+async fn client_rescouts_after_scouted_router_closes() {
+    zenoh::init_log_from_env_or("error");
+
+    let mcast_addr = SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(224, 0, 0, 224)),
+        get_free_udp_port(),
+    );
+
+    let router_config = || {
+        scouting_config(
+            mcast_addr,
+            WhatAmI::Router,
+            Some(format!("tcp/127.0.0.1:{}", get_free_tcp_port())),
+        )
+    };
+
+    let router_1 = zenoh::open(router_config()).await.unwrap();
+    let client = zenoh::open(scouting_config(mcast_addr, WhatAmI::Client, None))
+        .await
+        .unwrap();
+    assert_eq!(
+        client.info().routers_zid().await.collect::<Vec<_>>(),
+        vec![router_1.zid()]
+    );
+
+    router_1.close().await.unwrap();
+    let router_2 = zenoh::open(router_config()).await.unwrap();
+    let _queryable = router_2
+        .declare_queryable("test/rescout")
+        .callback(|query| {
+            zenoh::Wait::wait(query.reply("test/rescout", "pong")).unwrap();
+        })
+        .await
+        .unwrap();
+
+    timeout(Duration::from_secs(15), async {
+        while client.info().routers_zid().await.collect::<Vec<_>>() != vec![router_2.zid()] {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("client did not re-attach to the second router");
+
+    // The routers list is updated before the new face can route queries, so retry the get.
+    let reply = timeout(Duration::from_secs(10), async {
+        loop {
+            let replies = client.get("test/rescout").await.unwrap();
+            if let Ok(reply) = replies.recv_async().await {
+                return reply;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the reply");
+    assert_eq!(
+        reply.result().unwrap().payload().try_to_string().unwrap(),
+        "pong"
+    );
+
+    client.close().await.unwrap();
+    router_2.close().await.unwrap();
+}
+
+#[cfg(feature = "transport_tcp")]
+fn scouting_config(mcast_addr: SocketAddr, mode: WhatAmI, listen: Option<String>) -> Config {
+    let mut config = Config::default();
+    config.set_mode(Some(mode)).unwrap();
+    config.scouting.gossip.set_enabled(Some(false)).unwrap();
+    config.scouting.multicast.set_enabled(Some(true)).unwrap();
+    config
+        .scouting
+        .multicast
+        .set_address(Some(mcast_addr))
+        .unwrap();
+    config
+        .scouting
+        .multicast
+        .set_interface(Some("127.0.0.1".to_string()))
+        .unwrap();
+    if mode == WhatAmI::Router {
+        config
+            .scouting
+            .multicast
+            .set_autoconnect(Some(ModeDependentValue::Unique(WhatAmIMatcher::empty())))
+            .unwrap();
+    }
+    config
+        .listen
+        .endpoints
+        .set(listen.map_or_else(Vec::new, |l| vec![l.parse::<EndPoint>().unwrap()]))
+        .unwrap();
+
+    config
+}

@@ -35,7 +35,7 @@ use std::{
     net::SocketAddr,
     ops::Deref,
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Weak,
     },
 };
@@ -186,6 +186,8 @@ pub(crate) struct RuntimeState {
     zid: ZenohId,
     whatami: WhatAmI,
     next_id: AtomicU32,
+    /// Set while a client that lost its scouted router is looking for a new one.
+    client_reconnecting: AtomicBool,
     router: Arc<Gateway>,
     config: Notifier<ExpandedConfig>,
     manager: TransportManager,
@@ -839,6 +841,7 @@ impl RuntimeBuilder {
                 zid: zid.into(),
                 whatami,
                 next_id: AtomicU32::new(1), // 0 is reserved for routing core
+                client_reconnecting: AtomicBool::new(false),
                 router: gateway,
                 config,
                 manager: transport_manager,

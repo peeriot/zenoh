@@ -16,7 +16,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::DerefMut,
     str::FromStr,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -191,15 +191,27 @@ impl Runtime {
     }
 
     async fn start_client(&self) -> ZResult<()> {
-        let (listeners, peers, scouting, listen, autoconnect, addr, ifaces, timeout, multicast_ttl) = {
+        let listeners = self
+            .state
+            .config
+            .lock()
+            .listen()
+            .endpoints()
+            .client()
+            .unwrap_or(&vec![])
+            .clone();
+
+        self.bind_listeners(&listeners).await?;
+
+        self.connect_client(true).await
+    }
+
+    /// Connects the client to its configured endpoints or, if there are none, to a scouted router.
+    /// The multicast responder is only started when `spawn_responder` is set, i.e. on startup.
+    async fn connect_client(&self, spawn_responder: bool) -> ZResult<()> {
+        let (peers, scouting, listen, autoconnect, addr, ifaces, timeout, multicast_ttl) = {
             let guard = &self.state.config.lock();
             (
-                guard
-                    .listen()
-                    .endpoints()
-                    .client()
-                    .unwrap_or(&vec![])
-                    .clone(),
                 guard
                     .connect()
                     .endpoints()
@@ -216,12 +228,10 @@ impl Runtime {
             )
         };
 
-        self.bind_listeners(&listeners).await?;
-
         if scouting {
             if listen || peers.is_empty() {
                 let ifaces = Runtime::get_interfaces(&ifaces);
-                let mcast_socket = if listen {
+                let mcast_socket = if listen && spawn_responder {
                     Some(Runtime::bind_mcast_port(&addr, &ifaces, multicast_ttl).await?)
                 } else {
                     None
@@ -1296,6 +1306,54 @@ impl Runtime {
         }
     }
 
+    /// Re-runs the client connect, which finds a router again by scouting or by the configured
+    /// endpoints, until it is connected or the runtime is closed.
+    async fn client_reconnect(&self) {
+        let mut period = {
+            let guard = &self.state.config.lock();
+            zenoh_config::get_retry_config(guard, None, false).period()
+        };
+        let cancellation_token = self.get_cancellation_token();
+        loop {
+            while !self.is_closed() && !self.has_upstream().await {
+                match self.connect_client(false).await {
+                    Ok(()) if self.has_upstream().await => {}
+                    result => {
+                        let wait_time = period.next_duration();
+                        tracing::debug!(
+                            "Client has no upstream ({result:?}). Retry in {wait_time:?}."
+                        );
+                        tokio::select! {
+                            _ = tokio::time::sleep(wait_time) => {}
+                            _ = cancellation_token.cancelled() => break,
+                        }
+                    }
+                }
+            }
+            self.state
+                .client_reconnecting
+                .store(false, Ordering::Release);
+            // A transport lost before the flag was cleared found it set and spawned nothing.
+            if self.is_closed()
+                || self.has_upstream().await
+                || self.state.client_reconnecting.swap(true, Ordering::AcqRel)
+            {
+                break;
+            }
+        }
+    }
+
+    /// Whether the client still has a live transport to a router. Inbound peer sessions do not
+    /// count: a client attached to a router rejects them.
+    async fn has_upstream(&self) -> bool {
+        self.manager()
+            .get_transports_unicast()
+            .await
+            .iter()
+            .filter_map(|t| t.get_peer().ok())
+            .any(|p| !p.links.is_empty() && p.whatami != WhatAmI::Client)
+    }
+
     async fn peer_connector_retry(&self, peer: EndPoint) -> ZResult<ZenohIdProto> {
         self.peers_connector_retry(vec![peer], true)
             .await
@@ -1708,6 +1766,18 @@ impl Runtime {
         }
 
         if zread!(session.endpoints).is_empty() {
+            if session.runtime.whatami() == WhatAmI::Client
+                && !session
+                    .runtime
+                    .state
+                    .client_reconnecting
+                    .swap(true, Ordering::AcqRel)
+            {
+                let runtime = session.runtime.clone();
+                session
+                    .runtime
+                    .spawn_abortable(async move { runtime.client_reconnect().await });
+            }
             return;
         }
         let endpoints = session
